@@ -547,6 +547,10 @@ class CognitiveHierarchyPerception:
                 for profile in attributes:
                     if profile.color == dominant_color:
                         continue
+                    # Ignore UI indicators on extreme boundary rows if size <= 4
+                    cy, cx = profile.centroid
+                    if (int(cy) <= 1 or int(cy) >= H - 2) and profile.size <= 4:
+                        continue
                     min_y, min_x, max_y, max_x = profile.bbox
                     ent_diff = diff[min_y:max_y+1, min_x:max_x+1] & (frame[min_y:max_y+1, min_x:max_x+1] == profile.color)
                     if np.any(ent_diff):
@@ -1332,12 +1336,10 @@ class EpistemicPolicy:
         """Selects informative probe action to distinguish candidate transition models or break deadlocks."""
         available = list(observation.available_actions)
 
-        # Candidate probe actions
-        candidate_probes = [a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available]
+        # Candidate probe actions: evaluate all available non-reset actions
+        candidate_probes = [a for a in available if a != "RESET"]
         if not candidate_probes:
-            candidate_probes = [a for a in ("ACTION5", "ACTION6", "ACTION7") if a in available]
-        if not candidate_probes:
-            candidate_probes = available
+            candidate_probes = list(available)
 
         # Prioritize untested actions in world_model.action_stats
         untested = [
@@ -1358,7 +1360,9 @@ class EpistemicPolicy:
         if selected == "ACTION6":
             # Bounded coordinate selection: choose entity centroid clamped to [0, 63]
             if analysis.entities:
-                target_ent = analysis.entities[self.step_counter % len(analysis.entities)]
+                play_entities = [e for e in analysis.entities if 1 < int(e.centroid[0]) < 62 and 1 < int(e.centroid[1]) < 62]
+                pool = play_entities if play_entities else analysis.entities
+                target_ent = pool[self.step_counter % len(pool)]
                 cy, cx = target_ent.centroid
                 payload = {
                     "x": int(np.clip(cx, 0, 63)),

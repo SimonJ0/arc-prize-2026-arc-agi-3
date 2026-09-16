@@ -144,6 +144,10 @@ class CognitiveHierarchyPerception:
                 for profile in attributes:
                     if profile.color == dominant_color:
                         continue
+                    # Ignore UI indicators on extreme boundary rows if size <= 4
+                    cy, cx = profile.centroid
+                    if (int(cy) <= 1 or int(cy) >= H - 2) and profile.size <= 4:
+                        continue
                     min_y, min_x, max_y, max_x = profile.bbox
                     ent_diff = diff[min_y:max_y+1, min_x:max_x+1] & (frame[min_y:max_y+1, min_x:max_x+1] == profile.color)
                     if np.any(ent_diff):

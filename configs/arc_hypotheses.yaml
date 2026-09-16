@@ -51,3 +51,17 @@ hypotheses:
       min_confidence_threshold: 0.85
       enable_per_action_cardinal_fallback: true
 
+  - id: H006_unified_action_exploration_and_ui_filtering
+    name: "unified_action_exploration_and_ui_filtering"
+    description: >-
+      Unifies epistemic probing across all available action modalities (including ACTION5/ACTION6),
+      preventing multi-modal starvation in select-and-move games, and filters row-0/row-63 UI tickers
+      from corrupting avatar motion tracking.
+    parameters:
+      exploration_probe_budget: 15
+      max_planning_depth: 50
+      min_confidence_threshold: 0.85
+      enable_full_action_probe: true
+      filter_ui_boundary_tickers: true
+
+
