@@ -140,6 +140,18 @@ def cmd_play(args):
 
 
 
+def cmd_eval_platform(args):
+    from src.arc_core.platform_bench import PlatformBenchmarkSuite
+    suite = PlatformBenchmarkSuite()
+    games_subset = [g.strip() for g in args.games.split(",")] if args.games else None
+    suite.evaluate_suite(
+        split=args.split,
+        games_subset=games_subset,
+        max_actions=args.max_actions,
+        seed=args.seed,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="ARC-AGI-3 Autonomous Research & Submission CLI (ARC Prize 2026)"
@@ -153,7 +165,6 @@ def main():
 
     # 1. Build Submission
     build_parser = subparsers.add_parser("build-submission", help="Build and hash submission notebook (Zero network)")
-
     build_parser.add_argument("--accelerator", default="t4", choices=["cpu", "t4", "p100", "rtx6000"], help="Kaggle accelerator")
 
     # 2. Request Approval
@@ -173,19 +184,27 @@ def main():
     play_parser.add_argument("--game", default="synthetic_nav", help="Game ID")
     play_parser.add_argument("--max-steps", type=int, default=30, help="Max physical steps")
 
+    # 5. Evaluate on Official Platform
+    plat_parser = subparsers.add_parser("eval-platform", help="Run official platform benchmark on real ARC-AGI-3 games")
+    plat_parser.add_argument("--split", default="train", choices=["train", "holdout", "all"], help="Dataset split")
+    plat_parser.add_argument("--games", type=str, help="Comma-separated game IDs (overrides split)")
+    plat_parser.add_argument("--max-actions", type=int, default=100, help="Max actions per game")
+    plat_parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
     args = parser.parse_args()
 
     if args.command == "run-arc":
         cmd_run_arc(args)
     elif args.command == "build-submission":
         cmd_build_submission(args)
-
     elif args.command == "request-approval":
         cmd_request_approval(args)
     elif args.command == "submit":
         cmd_submit(args)
     elif args.command == "play":
         cmd_play(args)
+    elif args.command == "eval-platform":
+        cmd_eval_platform(args)
 
 
 if __name__ == "__main__":
