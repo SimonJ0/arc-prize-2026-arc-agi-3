@@ -85,8 +85,9 @@ def cmd_play(args):
                     print(f"Agent finished at step {step} with state: {frame_data.state}")
                     break
                 act = agent.choose_action(frame_data.frame, frame_data)
-                print(f"  Step {step:02d}: Action -> {act.name}")
-                frame_data = env.step(act)
+                payload = getattr(agent, "last_payload", None)
+                print(f"  Step {step:02d}: Action -> {act.name} (payload={payload})")
+                frame_data = env.step(act, data=payload) if payload else env.step(act)
                 if frame_data.state == GameState.WIN:
                     print(f"\n[WIN] Level/Game completed at step {step}!")
                     break
