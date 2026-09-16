@@ -1,0 +1,40 @@
+hypotheses:
+  - id: H001_baseline_epistemic_probe
+    name: "baseline_epistemic_probe"
+    description: >-
+      Active epistemic exploration: probing unmapped action semantics with low-risk
+      moves to calibrate transition models before committing to physical planning.
+    parameters:
+      exploration_probe_budget: 15
+      max_planning_depth: 30
+      min_confidence_threshold: 0.80
+
+  - id: H002_dynamic_collision_induction
+    name: "dynamic_collision_induction"
+    description: >-
+      Infers static wall and barrier properties when directional moves result in stationary
+      avatar frames, eliminating illegal or futile collision paths in forward planning.
+    parameters:
+      exploration_probe_budget: 12
+      max_planning_depth: 40
+      min_confidence_threshold: 0.85
+
+  - id: H003_action6_candidate_pruning
+    name: "action6_candidate_pruning"
+    description: >-
+      Prunes the 4,096 ACTION6 coordinate search space strictly to candidate entity centroids,
+      color boundaries, and active loci.
+    parameters:
+      exploration_probe_budget: 10
+      max_planning_depth: 40
+      min_confidence_threshold: 0.85
+
+  - id: H004_cross_level_invariant_transfer
+    name: "cross_level_invariant_transfer"
+    description: >-
+      Retains confirmed action-direction semantics and avatar color identities across
+      level transitions within the same game run, reducing early-level exploration overhead.
+    parameters:
+      exploration_probe_budget: 8
+      max_planning_depth: 45
+      min_confidence_threshold: 0.90

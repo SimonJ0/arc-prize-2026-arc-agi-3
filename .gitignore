@@ -1,0 +1,18 @@
+# Python & Virtual Environments
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Testing & Artifacts
+.pytest_cache/
+scratch/
+recordings/
+environment_files/
+experiments/ensemble_state.npz
+
+# Logs & OS
+*.log
+.DS_Store
+Thumbs.db
