@@ -171,7 +171,11 @@ class PlatformBenchmarkSuite:
                 resets_count += 1
 
             # Step environment
-            next_frame: Optional[FrameDataRaw] = env.step(action)
+            payload = getattr(agent, "last_payload", None)
+            if payload:
+                next_frame: Optional[FrameDataRaw] = env.step(action, data=payload)
+            else:
+                next_frame: Optional[FrameDataRaw] = env.step(action)
             if next_frame is None:
                 break
 

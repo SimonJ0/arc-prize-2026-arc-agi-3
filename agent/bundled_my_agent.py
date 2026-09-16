@@ -1583,5 +1583,6 @@ class MyAgent(Agent):
         self.previous_analysis = current_analysis
         self.previous_cognitive = cognitive_analysis
         self.previous_action = action_name
+        self.last_payload = payload
 
         return LegalityAdapter.to_game_action(action_name)
