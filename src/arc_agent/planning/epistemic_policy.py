@@ -308,8 +308,16 @@ class EpistemicPolicy:
         H, W = grid_shape
         import heapq
 
+        default_deltas = {
+            "ACTION1": (-1, 0),  # UP
+            "ACTION2": (1, 0),   # DOWN
+            "ACTION3": (0, -1),  # LEFT
+            "ACTION4": (0, 1),   # RIGHT
+        }
+
         # Build action displacement mapping from empirical learning and world model
         action_deltas = {}
+        known_step_sizes = []
         for act in ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5"):
             if act in available_actions:
                 disp = None
@@ -319,22 +327,21 @@ class EpistemicPolicy:
                     disp = world_model.get_action_displacement(act)
                 if disp is not None and disp != (0, 0):
                     action_deltas[act] = disp
+                    known_step_sizes.append(max(abs(disp[0]), abs(disp[1])))
 
-        # Fallback to default cardinal if empirical mapping empty
-        if not action_deltas:
-            default_deltas = {
-                "ACTION1": (-1, 0),  # UP
-                "ACTION2": (1, 0),   # DOWN
-                "ACTION3": (0, -1),  # LEFT
-                "ACTION4": (0, 1),   # RIGHT
-            }
-            for act, delta in default_deltas.items():
-                if act in available_actions:
-                    action_deltas[act] = delta
+        base_step = int(np.median(known_step_sizes)) if known_step_sizes else 1
+
+        # Populate cardinal fallback per available action so search space never collapses to 1D
+        for act, (dy, dx) in default_deltas.items():
+            if act in available_actions and act not in action_deltas:
+                action_deltas[act] = (dy * base_step, dx * base_step)
 
         valid_actions = [act for act in action_deltas if act in available_actions]
         if not valid_actions:
             return None
+
+        # Ensure start and goal coordinates are not blocked by obstacle mask
+        nav_obstacles = set(obstacles) - {start, goal}
 
         # Priority queue stores (f_score, cost, current_pos, path)
         def h(pos: Tuple[int, int]) -> int:
@@ -343,12 +350,13 @@ class EpistemicPolicy:
         heap = [(h(start), 0, start, [])]
         visited = {start: 0}
         max_expansions = 200  # Bound computation
+        goal_tolerance = max(1, base_step)
 
         while heap and max_expansions > 0:
             max_expansions -= 1
             f, cost, curr, path = heapq.heappop(heap)
 
-            if curr == goal or abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= 1:
+            if curr == goal or abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= goal_tolerance:
                 return path
 
             for act in valid_actions:
@@ -358,7 +366,7 @@ class EpistemicPolicy:
                 if not (0 <= ny < H and 0 <= nx < W):
                     continue
                 nxt = (ny, nx)
-                if nxt in obstacles:
+                if nxt in nav_obstacles:
                     continue
 
                 # Add penalty for highly-visited positions to discourage looping

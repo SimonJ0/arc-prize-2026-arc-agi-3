@@ -38,3 +38,16 @@ hypotheses:
       exploration_probe_budget: 8
       max_planning_depth: 45
       min_confidence_threshold: 0.90
+
+  - id: H005_empirical_walkability_and_multidimensional_search
+    name: "empirical_walkability_and_multidimensional_search"
+    description: >-
+      Replaces static size-based obstacle heuristics with empirical transition walkability,
+      preserves per-action cardinal priors in A* to prevent 1D search collapse,
+      and derives avatar coordinates dynamically from multi-pixel motion diffs.
+    parameters:
+      exploration_probe_budget: 15
+      max_planning_depth: 50
+      min_confidence_threshold: 0.85
+      enable_per_action_cardinal_fallback: true
+

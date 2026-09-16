@@ -150,12 +150,15 @@ class ArcResearchLoop:
         latencies_ms = []
         illegal_count = 0
 
+        params = hyp.get("parameters", {})
+
         # Benchmark 1: Movement Induction
         eval1, lat1, ill1 = self._run_single_test_env(
             env_fn=lambda: GridWorldEnv(avatar_start=(7, 7), goal_pos=(7, 11)),
             game_id="microworld_nav",
             baseline_actions=5,
             max_steps=25,
+            parameters=params,
         )
         evals.append(eval1)
         latencies_ms.extend(lat1)
@@ -167,6 +170,7 @@ class ArcResearchLoop:
             game_id="reversible_trap",
             baseline_actions=4,
             max_steps=25,
+            parameters=params,
         )
         evals.append(eval2)
         latencies_ms.extend(lat2)
@@ -178,6 +182,7 @@ class ArcResearchLoop:
             game_id="target_click",
             baseline_actions=1,
             max_steps=10,
+            parameters=params,
         )
         evals.append(eval3)
         latencies_ms.extend(lat3)
@@ -189,6 +194,7 @@ class ArcResearchLoop:
             game_id="key_door",
             baseline_actions=10,
             max_steps=35,
+            parameters=params,
         )
         evals.append(eval4)
         latencies_ms.extend(lat4)
@@ -200,10 +206,10 @@ class ArcResearchLoop:
         return evals, model_fidelity, illegal_count, latencies_ms
 
     def _run_single_test_env(
-        self, env_fn: Any, game_id: str, baseline_actions: int, max_steps: int
+        self, env_fn: Any, game_id: str, baseline_actions: int, max_steps: int, parameters: Optional[Dict[str, Any]] = None
     ) -> Tuple[EnvironmentEvaluation, List[float], int]:
         env = env_fn()
-        agent = MyAgent(game_id=game_id)
+        agent = MyAgent(game_id=game_id, parameters=parameters)
         latencies = []
         illegal_count = 0
 

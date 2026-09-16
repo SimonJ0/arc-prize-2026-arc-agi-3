@@ -460,6 +460,7 @@ class CognitiveHierarchyAnalysis:
     gravity_detected: bool = False
     gravity_vector: Tuple[int, int] = (0, 0)
     static_obstacles: Set[Tuple[int, int]] = field(default_factory=set)
+    is_stagnant: bool = False
 
 
 class CognitiveHierarchyPerception:
@@ -468,6 +469,7 @@ class CognitiveHierarchyPerception:
     def __init__(self):
         self.prev_frame: Optional[np.ndarray] = None
         self.prev_player_pos: Optional[Tuple[int, int]] = None
+        self.stagnant_steps: int = 0
 
     def analyze(
         self,
@@ -533,35 +535,52 @@ class CognitiveHierarchyPerception:
         symmetry = SpatialSymmetry(horizontal=h_sym, vertical=v_sym, diagonal=d_sym)
 
         # Infer player location:
-        # If known_player_color is specified, find its centroid;
-        # otherwise look for mobile singleton or dynamic entity
         player_pos = None
         player_color = known_player_color
 
-        if player_color is not None:
+        # 1. Prioritize dynamic motion diffs across consecutive frames
+        if prev_frame is not None and prev_frame.shape == frame.shape:
+            diff = (frame != prev_frame)
+            if np.any(diff):
+                best_entity = None
+                best_size = 999999
+                for profile in attributes:
+                    if profile.color == dominant_color:
+                        continue
+                    min_y, min_x, max_y, max_x = profile.bbox
+                    ent_diff = diff[min_y:max_y+1, min_x:max_x+1] & (frame[min_y:max_y+1, min_x:max_x+1] == profile.color)
+                    if np.any(ent_diff):
+                        if profile.size < best_size:
+                            best_entity = profile
+                            best_size = profile.size
+                if best_entity is not None:
+                    player_pos = (int(best_entity.centroid[0]), int(best_entity.centroid[1]))
+                    player_color = best_entity.color
+
+        # 2. If no dynamic motion detected or first frame, use known player color
+        if player_pos is None and player_color is not None:
             p_coords = np.argwhere(frame == player_color)
             if len(p_coords) > 0:
                 player_pos = (int(p_coords[:, 0].mean()), int(p_coords[:, 1].mean()))
 
-        if player_pos is None and prev_frame is not None and prev_frame.shape == frame.shape:
-            # Find moving pixels
-            diff = (frame != prev_frame)
-            if np.any(diff):
-                # Pixels present in current frame but not previous
-                curr_diff_colors = frame[diff]
-                # Player is usually a small moving entity
-                for profile in singleton_entities:
-                    cy, cx = int(profile.centroid[0]), int(profile.centroid[1])
-                    if diff[cy, cx]:
-                        player_pos = (cy, cx)
-                        player_color = profile.color
-                        break
-
-        # Fallback player: first small singleton entity
+        # 3. Fallback player: smallest non-dominant entity
         if player_pos is None and singleton_entities:
             target = singleton_entities[0]
             player_pos = (int(target.centroid[0]), int(target.centroid[1]))
             player_color = target.color
+        elif player_pos is None and attributes:
+            sorted_candidates = sorted([a for a in attributes if a.color != dominant_color], key=lambda a: a.size)
+            if sorted_candidates:
+                target = sorted_candidates[0]
+                player_pos = (int(target.centroid[0]), int(target.centroid[1]))
+                player_color = target.color
+
+        # Track position stagnation (failsafe against false static avatar locks)
+        if self.prev_player_pos is not None and player_pos is not None and player_pos == self.prev_player_pos:
+            self.stagnant_steps += 1
+        else:
+            self.stagnant_steps = 0
+        is_stagnant = (self.stagnant_steps >= 4)
 
         # --- LEVEL 3: CANDIDATE GOALS (Sequential targets) ---
         candidate_goals: List[Tuple[int, int]] = []
@@ -580,14 +599,30 @@ class CognitiveHierarchyPerception:
 
         # --- LEVEL 4: INTUITIVE PHYSICS (Obstacles & Gravity) ---
         static_obstacles: Set[Tuple[int, int]] = set()
-        # Large entities (>60 pixels) or boundary clusters are treated as impassable walls
+        player_standing_color = frame[player_pos[0], player_pos[1]] if player_pos is not None else None
+
         for profile in attributes:
-            if profile.size >= 40:
-                min_y, min_x, max_y, max_x = profile.bbox
+            # Walkable surface/floor the player stands on is NEVER an obstacle
+            if player_standing_color is not None and profile.color == player_standing_color:
+                continue
+            if player_color is not None and profile.color == player_color:
+                continue
+            # Small interactive entities (<35 pixels: keys, doors, stars) are never obstacles
+            if profile.size < 35:
+                continue
+
+            min_y, min_x, max_y, max_x = profile.bbox
+            touches_border = (min_y == 0 or max_y == H - 1 or min_x == 0 or max_x == W - 1)
+
+            # Only entities touching the border with high solidity are treated as static boundary walls
+            if touches_border and profile.solidity >= 0.7:
                 for y in range(min_y, max_y + 1):
                     for x in range(min_x, max_x + 1):
                         if frame[y, x] == profile.color:
                             static_obstacles.add((y, x))
+
+        if player_pos is not None:
+            static_obstacles.discard(player_pos)
 
         # Check for gravity (downward vertical displacement across unforced steps)
         gravity_detected = False
@@ -620,6 +655,7 @@ class CognitiveHierarchyPerception:
             gravity_detected=gravity_detected,
             gravity_vector=gravity_vector,
             static_obstacles=static_obstacles,
+            is_stagnant=is_stagnant,
         )
 
 # ======================================================================
@@ -1419,8 +1455,16 @@ class EpistemicPolicy:
         H, W = grid_shape
         import heapq
 
+        default_deltas = {
+            "ACTION1": (-1, 0),  # UP
+            "ACTION2": (1, 0),   # DOWN
+            "ACTION3": (0, -1),  # LEFT
+            "ACTION4": (0, 1),   # RIGHT
+        }
+
         # Build action displacement mapping from empirical learning and world model
         action_deltas = {}
+        known_step_sizes = []
         for act in ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5"):
             if act in available_actions:
                 disp = None
@@ -1430,22 +1474,21 @@ class EpistemicPolicy:
                     disp = world_model.get_action_displacement(act)
                 if disp is not None and disp != (0, 0):
                     action_deltas[act] = disp
+                    known_step_sizes.append(max(abs(disp[0]), abs(disp[1])))
 
-        # Fallback to default cardinal if empirical mapping empty
-        if not action_deltas:
-            default_deltas = {
-                "ACTION1": (-1, 0),  # UP
-                "ACTION2": (1, 0),   # DOWN
-                "ACTION3": (0, -1),  # LEFT
-                "ACTION4": (0, 1),   # RIGHT
-            }
-            for act, delta in default_deltas.items():
-                if act in available_actions:
-                    action_deltas[act] = delta
+        base_step = int(np.median(known_step_sizes)) if known_step_sizes else 1
+
+        # Populate cardinal fallback per available action so search space never collapses to 1D
+        for act, (dy, dx) in default_deltas.items():
+            if act in available_actions and act not in action_deltas:
+                action_deltas[act] = (dy * base_step, dx * base_step)
 
         valid_actions = [act for act in action_deltas if act in available_actions]
         if not valid_actions:
             return None
+
+        # Ensure start and goal coordinates are not blocked by obstacle mask
+        nav_obstacles = set(obstacles) - {start, goal}
 
         # Priority queue stores (f_score, cost, current_pos, path)
         def h(pos: Tuple[int, int]) -> int:
@@ -1454,12 +1497,13 @@ class EpistemicPolicy:
         heap = [(h(start), 0, start, [])]
         visited = {start: 0}
         max_expansions = 200  # Bound computation
+        goal_tolerance = max(1, base_step)
 
         while heap and max_expansions > 0:
             max_expansions -= 1
             f, cost, curr, path = heapq.heappop(heap)
 
-            if curr == goal or abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= 1:
+            if curr == goal or abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= goal_tolerance:
                 return path
 
             for act in valid_actions:
@@ -1469,7 +1513,7 @@ class EpistemicPolicy:
                 if not (0 <= ny < H and 0 <= nx < W):
                     continue
                 nxt = (ny, nx)
-                if nxt in obstacles:
+                if nxt in nav_obstacles:
                     continue
 
                 # Add penalty for highly-visited positions to discourage looping
@@ -1651,9 +1695,10 @@ class MyAgent(Agent):
     """
     MAX_ACTIONS = 1000
 
-    def __init__(self, game_id: str = "default_game", *args: Any, **kwargs: Any):
+    def __init__(self, game_id: str = "default_game", parameters: Optional[Dict[str, Any]] = None, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.game_id = getattr(self, "game_id", game_id)
+        self.parameters = parameters or {}
         self.perception = LayeredPerception()
         self.cognitive_perception = CognitiveHierarchyPerception()
         self.world_model = BeliefStateWorldModel()
@@ -1742,8 +1787,11 @@ class MyAgent(Agent):
             known_player_color=self.reasoning_state.player_color,
         )
 
-        if cognitive_analysis.player_color is not None and self.reasoning_state.player_color is None:
-            self.reasoning_state.player_color = cognitive_analysis.player_color
+        if cognitive_analysis.player_color is not None:
+            if self.reasoning_state.player_color is None or cognitive_analysis.is_stagnant:
+                self.reasoning_state.player_color = cognitive_analysis.player_color
+            elif cognitive_analysis.player_color != self.reasoning_state.player_color and prev_grid is not None:
+                self.reasoning_state.player_color = cognitive_analysis.player_color
 
         # 2. Update Reasoning Persistence (Causal displacements & deaths)
         if (

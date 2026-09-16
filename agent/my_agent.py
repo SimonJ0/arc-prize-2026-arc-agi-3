@@ -45,9 +45,10 @@ class MyAgent(Agent):
     """
     MAX_ACTIONS = 1000
 
-    def __init__(self, game_id: str = "default_game", *args: Any, **kwargs: Any):
+    def __init__(self, game_id: str = "default_game", parameters: Optional[Dict[str, Any]] = None, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.game_id = getattr(self, "game_id", game_id)
+        self.parameters = parameters or {}
         self.perception = LayeredPerception()
         self.cognitive_perception = CognitiveHierarchyPerception()
         self.world_model = BeliefStateWorldModel()
@@ -136,8 +137,11 @@ class MyAgent(Agent):
             known_player_color=self.reasoning_state.player_color,
         )
 
-        if cognitive_analysis.player_color is not None and self.reasoning_state.player_color is None:
-            self.reasoning_state.player_color = cognitive_analysis.player_color
+        if cognitive_analysis.player_color is not None:
+            if self.reasoning_state.player_color is None or cognitive_analysis.is_stagnant:
+                self.reasoning_state.player_color = cognitive_analysis.player_color
+            elif cognitive_analysis.player_color != self.reasoning_state.player_color and prev_grid is not None:
+                self.reasoning_state.player_color = cognitive_analysis.player_color
 
         # 2. Update Reasoning Persistence (Causal displacements & deaths)
         if (

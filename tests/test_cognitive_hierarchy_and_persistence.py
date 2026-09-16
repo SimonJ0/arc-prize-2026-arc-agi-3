@@ -222,3 +222,63 @@ def test_empirical_dynamics_learning():
     assert world_model.is_action_verified("ACTION1")
     assert world_model.get_action_displacement("ACTION1") == (-1, 0)
 
+
+def test_multidirectional_astar_preserves_unlearned_actions():
+    """Verify A* search does not collapse to 1D when only a single action delta is learned."""
+    policy = EpistemicPolicy()
+    reasoning_state = PersistentReasoningState(game_id="astar_2d_test")
+    # Only ACTION2 is empirically observed
+    reasoning_state.update_action_effect("ACTION2", dy=1, dx=0)
+
+    world_model = BeliefStateWorldModel()
+    start = (10, 10)
+    # Goal requires moving UP (dy=-5) and RIGHT (dx=+5)
+    goal = (5, 15)
+
+    path = policy._astar_search(
+        start=start,
+        goal=goal,
+        grid_shape=(30, 30),
+        obstacles=set(),
+        world_model=world_model,
+        available_actions={"ACTION1", "ACTION2", "ACTION3", "ACTION4"},
+        reasoning_state=reasoning_state,
+    )
+    assert path is not None, "A* failed to find 2D path when only 1 action was empirically known!"
+    assert "ACTION1" in path or "ACTION4" in path, "A* only used learned action, collapsing search to 1D!"
+
+
+def test_walkable_surface_not_marked_as_static_obstacle():
+    """Verify large floor/corridor surfaces (size >= 40) are not classified as obstacles."""
+    perception = CognitiveHierarchyPerception()
+    frame = np.zeros((30, 30), dtype=int)
+    # Background color 0
+    # Walkable floor of color 2 occupying 100 pixels in center
+    frame[5:15, 5:15] = 2
+
+    analysis = perception.analyze(frame=frame, known_player_color=2)
+    assert analysis.player_pos is not None
+    # Verify coordinates of color 2 floor are NOT in static_obstacles
+    assert (10, 10) not in analysis.static_obstacles
+    assert len(analysis.static_obstacles) == 0
+
+
+def test_dynamic_avatar_detection_from_multi_pixel_motion_diff():
+    """Verify multi-pixel moving entity (>4 pixels) is correctly identified as player avatar."""
+    perception = CognitiveHierarchyPerception()
+    f0 = np.zeros((30, 30), dtype=int)
+    # 9-pixel sprite of color 3 at (10:13, 10:13)
+    f0[10:13, 10:13] = 3
+
+    f1 = np.zeros((30, 30), dtype=int)
+    # Moves to (12:15, 10:13)
+    f1[12:15, 10:13] = 3
+
+    analysis = perception.analyze(frame=f1, prev_frame=f0)
+    assert analysis.player_color == 3
+    assert analysis.player_pos is not None
+    # Centroid of (12:15, 10:13) is (13, 11)
+    assert abs(analysis.player_pos[0] - 13) <= 1
+    assert abs(analysis.player_pos[1] - 11) <= 1
+
+
