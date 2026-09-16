@@ -356,7 +356,7 @@ class EpistemicPolicy:
             max_expansions -= 1
             f, cost, curr, path = heapq.heappop(heap)
 
-            if curr == goal or abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= goal_tolerance:
+            if curr == goal or (path and abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= goal_tolerance):
                 return path
 
             for act in valid_actions:
