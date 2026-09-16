@@ -50,8 +50,14 @@ class PersistentReasoningState:
     action_effects: Dict[str, Tuple[int, int]] = field(default_factory=dict)
     ineffective_actions: Set[Tuple[str, int]] = field(default_factory=set)  # (action, level)
 
-    # 5. Spatial Visitation Tracking
+    # 5. Spatial Visitation & Deadlock Tracking
     visited_positions: Set[Tuple[int, int]] = field(default_factory=set)
+    visitation_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
+
+    # 6. Surprise Detection & Falsification
+    last_predicted_pos: Optional[Tuple[int, int]] = None
+    falsified_goals: Set[Tuple[int, int]] = field(default_factory=set)
+    current_level: int = 1
 
     def has_active_plan(self) -> bool:
         """Returns True if there is a pending macro-action sequence."""
@@ -78,6 +84,37 @@ class PersistentReasoningState:
         self.active_macro_plan.clear()
         self.active_goal_coord = None
 
+    def record_visitation(self, pos: Tuple[int, int]) -> int:
+        """Increments and returns visitation frequency for position in current level."""
+        self.visited_positions.add(pos)
+        count = self.visitation_counts.get(pos, 0) + 1
+        self.visitation_counts[pos] = count
+        return count
+
+    def is_loop_detected(self, pos: Tuple[int, int], threshold: int = 3) -> bool:
+        """Returns True if agent has visited this position repeatedly, signaling oscillation."""
+        return self.visitation_counts.get(pos, 0) >= threshold
+
+    def falsify_goal(self, goal: Tuple[int, int]):
+        """Marks goal coordinate as falsified/ineffective for this level."""
+        self.falsified_goals.add(goal)
+        if self.active_goal_coord == goal:
+            self.clear_plan()
+
+    def check_and_handle_surprise(self, actual_pos: Tuple[int, int]) -> bool:
+        """
+        Compares actual position with last_predicted_pos.
+        If surprise occurs while executing a macro plan, immediately invalidates plan.
+        """
+        surprise = False
+        if self.last_predicted_pos is not None:
+            if self.last_predicted_pos != actual_pos:
+                surprise = True
+                if self.has_active_plan():
+                    self.clear_plan()
+        self.last_predicted_pos = None
+        return surprise
+
     def record_death(self, fatal_pos: Optional[Tuple[int, int]], fatal_color: Optional[int]):
         """Commits lethal position and entity color to permanent negative memory."""
         if fatal_pos is not None:
@@ -85,11 +122,26 @@ class PersistentReasoningState:
         if fatal_color is not None:
             self.hazard_colors.add(fatal_color)
         self.clear_plan()
+        self.last_predicted_pos = None
 
     def update_action_effect(self, action: str, dy: int, dx: int):
         """Caches verified movement vector for an action."""
         if (dy, dx) != (0, 0):
             self.action_effects[action] = (dy, dx)
+
+    def reset_level(self, new_level: int):
+        """
+        Resets level-scoped working memory upon level transition.
+        Retains persistent dynamics, death coordinates, and hazard colors.
+        """
+        self.current_level = new_level
+        self.active_macro_plan.clear()
+        self.active_goal_coord = None
+        self.falsified_goals.clear()
+        self.visitation_counts.clear()
+        self.visited_positions.clear()
+        self.last_predicted_pos = None
+
 
 
 class ContextCompactor:

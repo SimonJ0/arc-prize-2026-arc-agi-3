@@ -40,6 +40,9 @@ class BeliefStateWorldModel:
         self._init_hypotheses()
         self.avatar_color: Optional[int] = None
         self.solid_colors: set[int] = set()
+        # Empirical Transition Dynamics Learning
+        # action -> {attempts: int, displacements: { (dy,dx): count }, blocked: int, dominant: (dy,dx), fidelity: float}
+        self.action_stats: Dict[str, Dict[str, Any]] = {}
 
     def _init_hypotheses(self):
         """Initializes candidate transition dynamics hypotheses."""
@@ -53,11 +56,58 @@ class BeliefStateWorldModel:
                 )
             )
 
-    def can_reliably_plan(self) -> bool:
+    def is_action_verified(self, action: str) -> bool:
+        """
+        Checks if an action passes empirical 1-step verification (>=85% fidelity over >=2 moves).
+        """
+        stats = self.action_stats.get(action)
+        if stats and sum(stats["displacements"].values()) >= 2:
+            return stats["fidelity"] >= 0.85
+        # Fallback to top Bayesian hypothesis if sufficiently proven
+        top_hyp = self.belief.get_most_likely_hypothesis()
+        if (
+            top_hyp is not None
+            and top_hyp.confidence >= 0.80
+            and top_hyp.evidence_count >= 3
+            and top_hyp.accuracy() >= 0.85
+            and action in top_hyp.action_semantics
+        ):
+            return True
+        return False
+
+    def get_action_displacement(self, action: str) -> Optional[Tuple[int, int]]:
+        """Returns empirical or top-hypothesis displacement vector for action."""
+        stats = self.action_stats.get(action)
+        if stats and stats["dominant"] is not None and self.is_action_verified(action):
+            return stats["dominant"]
+
+        top_hyp = self.belief.get_most_likely_hypothesis()
+        if top_hyp is not None and top_hyp.confidence >= 0.5:
+            sem = top_hyp.action_semantics.get(action)
+            if sem in self.DELTA_MAP:
+                return self.DELTA_MAP[sem]
+
+        # Default cardinal fallback
+        default_deltas = {
+            "ACTION1": (-1, 0),
+            "ACTION2": (1, 0),
+            "ACTION3": (0, -1),
+            "ACTION4": (0, 1),
+        }
+        return default_deltas.get(action)
+
+    def can_reliably_plan(self, action: Optional[str] = None) -> bool:
         """
         Gating check: Deep forward planning is authorized ONLY when
         sufficient evidence confirms high predictive fidelity.
         """
+        if action is not None:
+            return self.is_action_verified(action)
+
+        verified_count = sum(1 for a in self.action_stats if self.is_action_verified(a))
+        if verified_count >= 2 and self.avatar_color is not None:
+            return True
+
         top_hyp = self.belief.get_most_likely_hypothesis()
         if top_hyp is None:
             return False
@@ -67,6 +117,31 @@ class BeliefStateWorldModel:
             and top_hyp.accuracy() >= 0.85
             and self.avatar_color is not None
         )
+
+    def _record_empirical_displacement(self, action: str, dy: float, dx: float):
+        """Records empirical (dy, dx) displacement and updates 1-step prediction stats."""
+        if action not in self.action_stats:
+            self.action_stats[action] = {
+                "attempts": 0,
+                "displacements": {},
+                "blocked": 0,
+                "dominant": None,
+                "fidelity": 0.0,
+            }
+        stats = self.action_stats[action]
+        stats["attempts"] += 1
+
+        if abs(dy) < 0.2 and abs(dx) < 0.2:
+            stats["blocked"] += 1
+            return
+
+        discrete_delta = (int(round(dy)), int(round(dx)))
+        stats["displacements"][discrete_delta] = stats["displacements"].get(discrete_delta, 0) + 1
+
+        dominant_disp, count = max(stats["displacements"].items(), key=lambda x: x[1])
+        stats["dominant"] = dominant_disp
+        total_moves = sum(stats["displacements"].values())
+        stats["fidelity"] = count / total_moves if total_moves > 0 else 0.0
 
     def update_with_transition(
         self,
@@ -100,6 +175,15 @@ class BeliefStateWorldModel:
                 if ent.is_dynamic and ent.size <= 16:  # Avatars are typically compact
                     self.avatar_color = ent.color
                     break
+
+        # Record empirical displacement if avatar is known
+        if self.avatar_color is not None:
+            prev_pos = self._find_entity_centroid(prev_frame, self.avatar_color)
+            curr_pos = self._find_entity_centroid(curr_frame, self.avatar_color)
+            if prev_pos is not None and curr_pos is not None:
+                dy = curr_pos[0] - prev_pos[0]
+                dx = curr_pos[1] - prev_pos[1]
+                self._record_empirical_displacement(action, dy, dx)
 
         # 2. If action is directional, test directional hypotheses
         if action in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") and self.avatar_color is not None:
@@ -183,7 +267,10 @@ class BeliefStateWorldModel:
     def predict_next_avatar_pos(
         self, curr_pos: Tuple[int, int], action: str
     ) -> Optional[Tuple[int, int]]:
-        """Predicts next avatar position under the most likely hypothesis."""
+        """Predicts next avatar position under verified empirical displacement or top hypothesis."""
+        disp = self.get_action_displacement(action)
+        if disp is not None:
+            return (curr_pos[0] + disp[0], curr_pos[1] + disp[1])
         top_hyp = self.belief.get_most_likely_hypothesis()
         if top_hyp is None:
             return None

@@ -40,13 +40,13 @@ class EpistemicPolicy:
         self.step_counter += 1
         state = observation.state
         available = observation.available_actions
+        p_pos = cognitive_analysis.player_pos if cognitive_analysis else None
 
         # 1. State-level guard: GAME_OVER requires RESET
         if state == "GAME_OVER":
             if reasoning_state is not None:
                 # Learn fatal location to avoid it in future runs
-                fatal_pos = cognitive_analysis.player_pos if cognitive_analysis else None
-                reasoning_state.record_death(fatal_pos, None)
+                reasoning_state.record_death(p_pos, None)
 
             action, payload = LegalityAdapter.validate_action(
                 state=state,
@@ -66,8 +66,25 @@ class EpistemicPolicy:
             )
             return action, payload, trace
 
-        # 2. Reasoning Persistence: Check if there is an active macro-plan in flight
-        if reasoning_state is not None and reasoning_state.has_active_plan():
+        # Surprise & Deadlock Loop Management
+        is_loop = False
+        if reasoning_state is not None and p_pos is not None:
+            # 1b. Surprise Invalidation: Did last action land where we expected?
+            reasoning_state.check_and_handle_surprise(p_pos)
+
+            # 1c. Loop / Deadlock Breaker
+            v_count = reasoning_state.record_visitation(p_pos)
+            if v_count >= 3:
+                is_loop = True
+
+            # 1d. Falsify unrewarded goals: If player reached active goal without level advancing
+            if reasoning_state.active_goal_coord is not None:
+                g = reasoning_state.active_goal_coord
+                if abs(p_pos[0] - g[0]) + abs(p_pos[1] - g[1]) <= 1:
+                    reasoning_state.falsify_goal(g)
+
+        # 2. Reasoning Persistence: Check if there is an active macro-plan in flight (and not in deadlock loop)
+        if reasoning_state is not None and reasoning_state.has_active_plan() and not is_loop:
             planned_action = reasoning_state.next_planned_action(available)
             if planned_action is not None:
                 action, payload = LegalityAdapter.validate_action(
@@ -75,6 +92,8 @@ class EpistemicPolicy:
                     available_actions=available,
                     proposed_action=planned_action,
                 )
+                if p_pos is not None:
+                    reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
                 trace = DecisionTrace(
                     level=observation.level,
                     step=self.step_counter,
@@ -89,15 +108,20 @@ class EpistemicPolicy:
                 return action, payload, trace
 
         # 3. DRE-Bench Sequential Planning: Macro-path to candidate goals
-        if cognitive_analysis is not None and cognitive_analysis.player_pos is not None:
-            p_pos = cognitive_analysis.player_pos
-            goals = cognitive_analysis.candidate_goals
+        if cognitive_analysis is not None and p_pos is not None and not is_loop:
+            all_goals = cognitive_analysis.candidate_goals
+            # Filter out falsified goals for this level
+            if reasoning_state is not None and reasoning_state.falsified_goals:
+                candidate_goals = [g for g in all_goals if g not in reasoning_state.falsified_goals]
+            else:
+                candidate_goals = all_goals
+
             obstacles = set(cognitive_analysis.static_obstacles)
             if reasoning_state is not None:
                 obstacles.update(reasoning_state.death_coords)
 
             frame_shape = observation.frames[0].shape
-            for goal in goals[:3]:  # Evaluate top candidate goals
+            for goal in candidate_goals[:3]:  # Evaluate top non-falsified candidate goals
                 path = self._astar_search(
                     start=p_pos,
                     goal=goal,
@@ -118,6 +142,8 @@ class EpistemicPolicy:
                         available_actions=available,
                         proposed_action=chosen,
                     )
+                    if reasoning_state is not None:
+                        reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
                     trace = DecisionTrace(
                         level=observation.level,
                         step=self.step_counter,
@@ -131,17 +157,21 @@ class EpistemicPolicy:
                     )
                     return action, payload, trace
 
-        # 4. Exploitation Mode: Validated model allows forward planning
-        if world_model.can_reliably_plan():
+        # 4. Exploitation Mode: Validated model allows forward planning (if not in loop)
+        if world_model.can_reliably_plan() and not is_loop:
             action, payload, trace = self._plan_goal_trajectory(
                 observation, analysis, world_model
             )
+            if reasoning_state is not None and p_pos is not None:
+                reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
             return action, payload, trace
 
-        # 5. Epistemic Probing Mode: Explore untested actions to induce dynamics
+        # 5. Epistemic Probing Mode / Deadlock Breaker
         action, payload, trace = self._select_epistemic_probe(
-            observation, analysis, world_model
+            observation, analysis, world_model, reasoning_state, is_loop
         )
+        if reasoning_state is not None and p_pos is not None:
+            reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
         return action, payload, trace
 
     def _select_epistemic_probe(
@@ -149,34 +179,54 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
+        reasoning_state: Optional[PersistentReasoningState] = None,
+        is_loop: bool = False,
     ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
-        """Selects informative probe action to distinguish candidate transition models."""
-        available = observation.available_actions
+        """Selects informative probe action to distinguish candidate transition models or break deadlocks."""
+        available = list(observation.available_actions)
 
-        # Rank probe candidates: test untested directional actions first
-        probes = [a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available]
-        if not probes:
-            probes = [a for a in ("ACTION5", "ACTION6", "ACTION7") if a in available]
-        if not probes:
-            probes = list(available)
+        # Candidate probe actions
+        candidate_probes = [a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available]
+        if not candidate_probes:
+            candidate_probes = [a for a in ("ACTION5", "ACTION6", "ACTION7") if a in available]
+        if not candidate_probes:
+            candidate_probes = available
 
-        # Pick probe with highest epistemic utility
-        selected = probes[self.step_counter % len(probes)]
+        # Prioritize untested actions in world_model.action_stats
+        untested = [
+            a for a in candidate_probes
+            if a not in getattr(world_model, "action_stats", {})
+            or world_model.action_stats[a]["attempts"] == 0
+        ]
+        if untested:
+            selected = untested[self.step_counter % len(untested)]
+        else:
+            # Sort by least attempts
+            candidate_probes.sort(
+                key=lambda a: getattr(world_model, "action_stats", {}).get(a, {}).get("attempts", 0)
+            )
+            selected = candidate_probes[0]
+
         payload = {}
-
         if selected == "ACTION6":
-            # Prune coordinates to candidate dynamic or target entity centroids
+            # Bounded coordinate selection: choose entity centroid clamped to [0, 63]
             if analysis.entities:
-                target_ent = analysis.entities[0]
+                target_ent = analysis.entities[self.step_counter % len(analysis.entities)]
                 cy, cx = target_ent.centroid
-                payload = {"x": int(cx), "y": int(cy)}
+                payload = {
+                    "x": int(np.clip(cx, 0, 63)),
+                    "y": int(np.clip(cy, 0, 63)),
+                }
             else:
                 H, W = analysis.frame_shape
-                payload = {"x": W // 2, "y": H // 2}
+                payload = {
+                    "x": int(np.clip(W // 2, 0, 63)),
+                    "y": int(np.clip(H // 2, 0, 63)),
+                }
 
         action, valid_payload = LegalityAdapter.validate_action(
             state=observation.state,
-            available_actions=available,
+            available_actions=observation.available_actions,
             proposed_action=selected,
             proposed_payload=payload,
         )
@@ -185,10 +235,10 @@ class EpistemicPolicy:
             level=observation.level,
             step=self.step_counter,
             observation_hash=str(hash(observation.frames[0].tobytes())),
-            legal_actions=tuple(sorted(list(available))),
+            legal_actions=tuple(sorted(list(observation.available_actions))),
             selected_action=action,
             selected_payload=valid_payload,
-            planning_mode="EPISTEMIC_PROBE",
+            planning_mode="DEADLOCK_BREAKER" if is_loop else "EPISTEMIC_PROBE",
             predicted_next_state="NOT_FINISHED",
             confidence=0.5,
         )
@@ -258,16 +308,27 @@ class EpistemicPolicy:
         H, W = grid_shape
         import heapq
 
-        # Standard directional action displacement mapping
-        action_deltas = {
-            "ACTION1": (-1, 0),  # UP
-            "ACTION2": (1, 0),   # DOWN
-            "ACTION3": (0, -1),  # LEFT
-            "ACTION4": (0, 1),   # RIGHT
-        }
-        # Override with empirically cached action effects if available
-        if reasoning_state is not None and reasoning_state.action_effects:
-            for act, delta in reasoning_state.action_effects.items():
+        # Build action displacement mapping from empirical learning and world model
+        action_deltas = {}
+        for act in ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5"):
+            if act in available_actions:
+                disp = None
+                if reasoning_state is not None and act in reasoning_state.action_effects:
+                    disp = reasoning_state.action_effects[act]
+                elif world_model is not None:
+                    disp = world_model.get_action_displacement(act)
+                if disp is not None and disp != (0, 0):
+                    action_deltas[act] = disp
+
+        # Fallback to default cardinal if empirical mapping empty
+        if not action_deltas:
+            default_deltas = {
+                "ACTION1": (-1, 0),  # UP
+                "ACTION2": (1, 0),   # DOWN
+                "ACTION3": (0, -1),  # LEFT
+                "ACTION4": (0, 1),   # RIGHT
+            }
+            for act, delta in default_deltas.items():
                 if act in available_actions:
                     action_deltas[act] = delta
 
@@ -281,7 +342,7 @@ class EpistemicPolicy:
 
         heap = [(h(start), 0, start, [])]
         visited = {start: 0}
-        max_expansions = 150  # Bound computation
+        max_expansions = 200  # Bound computation
 
         while heap and max_expansions > 0:
             max_expansions -= 1
@@ -300,7 +361,16 @@ class EpistemicPolicy:
                 if nxt in obstacles:
                     continue
 
-                new_cost = cost + 1
+                # Add penalty for highly-visited positions to discourage looping
+                extra_cost = 0
+                if reasoning_state and nxt in reasoning_state.visitation_counts:
+                    extra_cost = reasoning_state.visitation_counts[nxt] * 2
+
+                # Prefer verified actions
+                if world_model and not world_model.is_action_verified(act):
+                    extra_cost += 1
+
+                new_cost = cost + 1 + extra_cost
                 if nxt not in visited or new_cost < visited[nxt]:
                     visited[nxt] = new_cost
                     heapq.heappush(heap, (new_cost + h(nxt), new_cost, nxt, path + [act]))

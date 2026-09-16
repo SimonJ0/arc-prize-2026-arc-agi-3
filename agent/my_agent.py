@@ -43,7 +43,7 @@ class MyAgent(Agent):
     """
     Production-ready Uncertainty-Aware Agent for ARC-AGI-3.
     """
-    MAX_ACTIONS = 120
+    MAX_ACTIONS = 1000
 
     def __init__(self, game_id: str = "default_game", *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
@@ -77,6 +77,10 @@ class MyAgent(Agent):
         Inspects environment state and returns a validated GameAction enum.
         """
         self.action_count += 1
+
+        current_level = getattr(latest_frame, "levels_completed", 0) + 1
+        if current_level != self.reasoning_state.current_level:
+            self.reasoning_state.reset_level(current_level)
 
         # Extract frame arrays
         raw_frames = getattr(latest_frame, "frame", [])

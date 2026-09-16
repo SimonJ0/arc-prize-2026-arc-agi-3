@@ -375,3 +375,81 @@ class PlatformBenchmarkSuite:
             board_file.write_text(board_file.read_text(encoding="utf-8") + row, encoding="utf-8")
 
         return report_file
+
+    def evaluate_multi_budget(
+        self,
+        split: str = "holdout",
+        games_subset: Optional[List[str]] = None,
+        budgets: Optional[List[int]] = None,
+        agent_factory: Optional[Callable[[str], Any]] = None,
+        seed: int = 42,
+    ) -> Dict[str, Any]:
+        """
+        Runs multi-budget evaluation across designated split (e.g. holdout)
+        for multiple action budget limits (e.g. 50, 100, 200).
+        Calculates performance scaling curves, levels completed, and bootstrap LCB.
+        """
+        if budgets is None:
+            budgets = [50, 100, 200]
+
+        print(f"\n{'='*75}")
+        print(f"OFFICIAL ARC-AGI MULTI-BUDGET BENCHMARK ({split.upper()} SUITE - BUDGETS: {budgets})")
+        print(f"{'='*75}")
+
+        budget_results = {}
+        for b in budgets:
+            print(f"\n--- Commencing evaluation for Action Budget: {b} ---")
+            summary = self.evaluate_suite(
+                split=split,
+                games_subset=games_subset,
+                max_actions=b,
+                agent_factory=agent_factory,
+                seed=seed,
+            )
+            budget_results[str(b)] = summary
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        multi_summary = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "split": split,
+            "budgets": budgets,
+            "results_by_budget": budget_results,
+            "budget_curve": {
+                b: {
+                    "mean_rhae": budget_results[str(b)]["mean_rhae_score"],
+                    "bootstrap_95_lcb": budget_results[str(b)]["bootstrap_95_lcb"],
+                    "levels_completed": budget_results[str(b)]["total_levels_completed"],
+                    "total_levels": budget_results[str(b)]["total_levels_available"],
+                    "completion_rate": budget_results[str(b)]["overall_completion_rate"],
+                }
+                for b in budgets
+            },
+        }
+
+        # Save multi-budget report
+        multi_report_file = self.reports_dir / f"platform_multi_budget_{split}_{ts}.json"
+        multi_report_file.write_text(json.dumps(multi_summary, indent=2), encoding="utf-8")
+        multi_summary["report_path"] = str(multi_report_file)
+
+        # Append each budget's result to arc_leaderboard.md
+        board_file = self.reports_dir / "arc_leaderboard.md"
+        if board_file.exists():
+            rows = ""
+            for b in budgets:
+                res = budget_results[str(b)]
+                rows += (
+                    f"| {ts} | PLATFORM_{split.upper()}_B{b} | {res['mean_rhae_score']} | "
+                    f"{res['bootstrap_95_lcb']} | {res['total_levels_completed']}/{res['total_levels_available']} | "
+                    f"{res['games_evaluated']} | [JSON]({multi_report_file.name}) |\n"
+                )
+            board_file.write_text(board_file.read_text(encoding="utf-8") + rows, encoding="utf-8")
+
+        print(f"\n{'='*75}")
+        print(f"MULTI-BUDGET EVALUATION COMPLETE:")
+        for b in budgets:
+            c = multi_summary["budget_curve"][b]
+            print(f"  Budget {b:3d}: Mean RHAE={c['mean_rhae']} | 95% LCB={c['bootstrap_95_lcb']} | Levels={c['levels_completed']}/{c['total_levels']}")
+        print(f"  Multi-Budget Scorecard Saved At: {multi_report_file}")
+        print(f"{'='*75}\n")
+
+        return multi_summary

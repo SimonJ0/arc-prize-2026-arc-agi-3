@@ -165,3 +165,60 @@ def test_context_compactor():
     assert traj["total_steps"] == 7
     # Rolling history capped at 5
     assert len(traj["recent_trajectory"]) == 5
+
+
+def test_surprise_detection_invalidates_plan():
+    """Verify that unexpected position displacement immediately invalidates active macro-plan."""
+    reasoning_state = PersistentReasoningState(game_id="surprise_test")
+    reasoning_state.set_macro_plan(["ACTION1", "ACTION2"], goal=(5, 5))
+    reasoning_state.last_predicted_pos = (2, 3)
+
+    assert reasoning_state.has_active_plan()
+
+    # Actual position lands at (2, 2) instead of (2, 3) -> surprise!
+    surprise = reasoning_state.check_and_handle_surprise(actual_pos=(2, 2))
+    assert surprise is True
+    assert not reasoning_state.has_active_plan()
+    assert reasoning_state.last_predicted_pos is None
+
+
+def test_loop_detection_and_visitation_tracking():
+    """Verify visitation counting detects oscillations and triggers loop flag."""
+    reasoning_state = PersistentReasoningState(game_id="loop_test")
+    pos = (4, 4)
+
+    assert not reasoning_state.is_loop_detected(pos)
+    assert reasoning_state.record_visitation(pos) == 1
+    assert reasoning_state.record_visitation(pos) == 2
+    assert not reasoning_state.is_loop_detected(pos)
+
+    assert reasoning_state.record_visitation(pos) == 3
+    assert reasoning_state.is_loop_detected(pos)
+
+
+def test_falsifiable_goals():
+    """Verify goal falsification clears active plan and registers coordinate."""
+    reasoning_state = PersistentReasoningState(game_id="goal_test")
+    goal = (7, 7)
+    reasoning_state.set_macro_plan(["ACTION1"], goal=goal)
+
+    assert goal not in reasoning_state.falsified_goals
+    reasoning_state.falsify_goal(goal)
+    assert goal in reasoning_state.falsified_goals
+    assert not reasoning_state.has_active_plan()
+
+
+def test_empirical_dynamics_learning():
+    """Verify empirical displacement tracking and 1-step verification."""
+    world_model = BeliefStateWorldModel()
+
+    # Initially unverified
+    assert not world_model.is_action_verified("ACTION1")
+
+    # Record two consistent displacements: dy=-1, dx=0
+    world_model._record_empirical_displacement("ACTION1", -1.0, 0.0)
+    world_model._record_empirical_displacement("ACTION1", -1.0, 0.0)
+
+    assert world_model.is_action_verified("ACTION1")
+    assert world_model.get_action_displacement("ACTION1") == (-1, 0)
+

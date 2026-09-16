@@ -65,3 +65,23 @@ def test_platform_suite_report_generation(tmp_path):
     assert "report_path" in summary
     report_file = Path(summary["report_path"])
     assert report_file.exists()
+
+
+def test_platform_multi_budget_evaluation(tmp_path):
+    """Verify multi-budget evaluation method produces budget curves and valid report."""
+    suite = PlatformBenchmarkSuite(reports_dir=str(tmp_path))
+    test_game = TRAIN_GAMES[0]
+    multi_summary = suite.evaluate_multi_budget(
+        split="custom",
+        games_subset=[test_game],
+        budgets=[3, 6],
+        seed=42,
+    )
+
+    assert "budget_curve" in multi_summary
+    assert 3 in multi_summary["budget_curve"]
+    assert 6 in multi_summary["budget_curve"]
+    assert "report_path" in multi_summary
+    report_file = Path(multi_summary["report_path"])
+    assert report_file.exists()
+

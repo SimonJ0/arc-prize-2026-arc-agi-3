@@ -144,12 +144,21 @@ def cmd_eval_platform(args):
     from src.arc_core.platform_bench import PlatformBenchmarkSuite
     suite = PlatformBenchmarkSuite()
     games_subset = [g.strip() for g in args.games.split(",")] if args.games else None
-    suite.evaluate_suite(
-        split=args.split,
-        games_subset=games_subset,
-        max_actions=args.max_actions,
-        seed=args.seed,
-    )
+    if getattr(args, "budgets", None):
+        budgets = [int(b.strip()) for b in args.budgets.split(",") if b.strip()]
+        suite.evaluate_multi_budget(
+            split=args.split,
+            games_subset=games_subset,
+            budgets=budgets,
+            seed=args.seed,
+        )
+    else:
+        suite.evaluate_suite(
+            split=args.split,
+            games_subset=games_subset,
+            max_actions=args.max_actions,
+            seed=args.seed,
+        )
 
 
 def main():
@@ -189,6 +198,7 @@ def main():
     plat_parser.add_argument("--split", default="train", choices=["train", "holdout", "all"], help="Dataset split")
     plat_parser.add_argument("--games", type=str, help="Comma-separated game IDs (overrides split)")
     plat_parser.add_argument("--max-actions", type=int, default=100, help="Max actions per game")
+    plat_parser.add_argument("--budgets", type=str, help="Comma-separated action budgets (e.g. 50,100,200)")
     plat_parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()
