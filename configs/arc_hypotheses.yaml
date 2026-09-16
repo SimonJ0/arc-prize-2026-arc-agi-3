@@ -62,6 +62,17 @@ hypotheses:
       max_planning_depth: 50
       min_confidence_threshold: 0.85
       enable_full_action_probe: true
-      filter_ui_boundary_tickers: true
+  - id: H007_exact_goal_traversal_and_nonpremature_falsification
+    name: "exact_goal_traversal_and_nonpremature_falsification"
+    description: >-
+      Guarantees exact goal traversal in A* search by prioritizing path completion to the target tile,
+      falling back to adjacent nodes only if impassable, and prevents premature plan invalidation and goal
+      falsification at distance 1 while macro plans are actively executing.
+    parameters:
+      exploration_probe_budget: 15
+      max_planning_depth: 50
+      min_confidence_threshold: 0.85
+      enable_exact_goal_traversal: true
+      guard_plan_falsification: true
 
 

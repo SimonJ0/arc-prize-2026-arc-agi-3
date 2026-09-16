@@ -77,10 +77,12 @@ class EpistemicPolicy:
             if v_count >= 3:
                 is_loop = True
 
-            # 1d. Falsify unrewarded goals: If player reached active goal without level advancing
+            # 1d. Falsify unrewarded goals: If player reached active goal or looped without level advancing
             if reasoning_state.active_goal_coord is not None:
                 g = reasoning_state.active_goal_coord
-                if abs(p_pos[0] - g[0]) + abs(p_pos[1] - g[1]) <= 1:
+                if not reasoning_state.has_active_plan() and p_pos == g:
+                    reasoning_state.falsify_goal(g)
+                elif is_loop:
                     reasoning_state.falsify_goal(g)
 
         # 2. Reasoning Persistence: Check if there is an active macro-plan in flight (and not in deadlock loop)
@@ -352,12 +354,20 @@ class EpistemicPolicy:
         max_expansions = 200  # Bound computation
         goal_tolerance = max(1, base_step)
 
+        best_path = None
+        best_dist = float("inf")
+
         while heap and max_expansions > 0:
             max_expansions -= 1
             f, cost, curr, path = heapq.heappop(heap)
 
-            if curr == goal or (path and abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= goal_tolerance):
+            if curr == goal:
                 return path
+
+            dist = h(curr)
+            if path and dist < best_dist:
+                best_dist = dist
+                best_path = path
 
             for act in valid_actions:
                 dy, dx = action_deltas[act]
@@ -382,6 +392,9 @@ class EpistemicPolicy:
                 if nxt not in visited or new_cost < visited[nxt]:
                     visited[nxt] = new_cost
                     heapq.heappush(heap, (new_cost + h(nxt), new_cost, nxt, path + [act]))
+
+        if best_path is not None and best_dist <= goal_tolerance:
+            return best_path
 
         return None
 
