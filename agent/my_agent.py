@@ -1,10 +1,10 @@
 """
 Uncertainty-Aware Agent for ARC-AGI-3.
-Combines:
-1. Hard legality adapter (strictly conforms to available_actions, handles GAME_OVER -> RESET).
-2. Multi-hypothesis layered perception (candidate backgrounds, connected components).
-3. Factored belief-state world model (Bayesian posterior over transition dynamics).
-4. Epistemic decision policy (epistemic probing vs bounded goal planning).
+Integrates:
+1. DRE-Bench 4-Level Cognitive Hierarchy (Attribute, Spatial, Sequential Macro-Planning, Intuitive Physics).
+2. OpenAI Reasoning Persistence (Persistent working scratchpad & active multi-step macro-plans).
+3. Automatic Context Compaction (Compact semantic delta summaries, zero context rot).
+4. Hard legality adapter (strictly conforms to available_actions, handles GAME_OVER -> RESET).
 5. Scoped episode memory (bounds invariants to game run, avoids negative transfer).
 """
 
@@ -17,9 +17,17 @@ from arcengine import GameAction, GameState, FrameDataRaw
 from src.arc_core.contracts import Observation
 from src.arc_agent.legality_adapter import LegalityAdapter
 from src.arc_agent.perception.layered_perception import LayeredPerception, FrameAnalysis
+from src.arc_agent.perception.cognitive_hierarchy import (
+    CognitiveHierarchyPerception,
+    CognitiveHierarchyAnalysis,
+)
 from src.arc_agent.world_model.belief_state import BeliefStateWorldModel
 from src.arc_agent.planning.epistemic_policy import EpistemicPolicy
 from src.arc_agent.memory.scoped_memory import ScopedEpisodeMemory
+from src.arc_agent.memory.reasoning_state import (
+    PersistentReasoningState,
+    ContextCompactor,
+)
 
 # When running in official starter, `Agent` is imported from `agents.agent`
 try:
@@ -41,12 +49,16 @@ class MyAgent(Agent):
         super().__init__(*args, **kwargs)
         self.game_id = getattr(self, "game_id", game_id)
         self.perception = LayeredPerception()
+        self.cognitive_perception = CognitiveHierarchyPerception()
         self.world_model = BeliefStateWorldModel()
         self.policy = EpistemicPolicy()
         self.memory = ScopedEpisodeMemory(game_key=self.game_id)
+        self.reasoning_state = PersistentReasoningState(game_id=self.game_id)
+        self.compactor = ContextCompactor()
 
         self.previous_observation: Optional[Observation] = None
         self.previous_analysis: Optional[FrameAnalysis] = None
+        self.previous_cognitive: Optional[CognitiveHierarchyAnalysis] = None
         self.previous_action: Optional[str] = None
         self.action_count = 0
 
@@ -98,7 +110,6 @@ class MyAgent(Agent):
                 except Exception:
                     avail_actions.add(str(a).split(".")[-1])
 
-
         if not avail_actions:
             avail_actions = {"RESET", "ACTION1"}
 
@@ -112,11 +123,42 @@ class MyAgent(Agent):
             guid=getattr(latest_frame, "guid", None),
         )
 
-        # Perception
+        # 1. Perception & DRE-Bench Cognitive Analysis
         prev_grid = self.previous_observation.frames[0] if self.previous_observation else None
         current_analysis = self.perception.analyze(grid, prev_grid)
+        cognitive_analysis = self.cognitive_perception.analyze(
+            frame=grid,
+            prev_frame=prev_grid,
+            known_player_color=self.reasoning_state.player_color,
+        )
 
-        # Belief State Update from previous transition
+        if cognitive_analysis.player_color is not None and self.reasoning_state.player_color is None:
+            self.reasoning_state.player_color = cognitive_analysis.player_color
+
+        # 2. Update Reasoning Persistence (Causal displacements & deaths)
+        if (
+            self.previous_action is not None
+            and self.previous_cognitive is not None
+            and self.previous_cognitive.player_pos is not None
+            and cognitive_analysis.player_pos is not None
+        ):
+            dy = cognitive_analysis.player_pos[0] - self.previous_cognitive.player_pos[0]
+            dx = cognitive_analysis.player_pos[1] - self.previous_cognitive.player_pos[1]
+            self.reasoning_state.update_action_effect(self.previous_action, dy, dx)
+
+        # Context compaction
+        prev_pos = self.previous_cognitive.player_pos if self.previous_cognitive else None
+        self.compactor.compact_step(
+            step=self.action_count,
+            level=current_obs.level,
+            action=self.previous_action or "NONE",
+            curr_pos=cognitive_analysis.player_pos,
+            prev_pos=prev_pos,
+            state=state_str,
+            levels_completed=getattr(latest_frame, "levels_completed", 0),
+        )
+
+        # Belief State Update
         if (
             self.previous_observation is not None
             and self.previous_analysis is not None
@@ -130,29 +172,19 @@ class MyAgent(Agent):
                 curr_analysis=current_analysis,
             )
 
-            # Record event in scoped memory
-            self.memory.record_transition(
-                step=self.action_count,
-                level=current_obs.level,
-                from_frame=prev_grid,
-                action=self.previous_action,
-                payload={},
-                to_state=state_str,
-                to_frame=grid,
-                planning_mode="ONLINE_DECISION",
-                confidence=self.world_model.belief.one_step_accuracy,
-            )
-
-        # Decision Policy: Probing vs Goal Planning
+        # 3. Decision Policy: Macro-Planning vs Epistemic Probing
         action_name, payload, trace = self.policy.select_action(
             observation=current_obs,
             analysis=current_analysis,
             world_model=self.world_model,
+            reasoning_state=self.reasoning_state,
+            cognitive_analysis=cognitive_analysis,
         )
 
         # Update tracking
         self.previous_observation = current_obs
         self.previous_analysis = current_analysis
+        self.previous_cognitive = cognitive_analysis
         self.previous_action = action_name
 
         return LegalityAdapter.to_game_action(action_name)

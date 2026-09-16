@@ -10,12 +10,18 @@ __pycache__/
 scratch/
 recordings/
 environment_files/
-experiments/ensemble_state.npz
+experiments/
+reports/
 
 # Logs & OS
 *.log
 .DS_Store
 Thumbs.db
+
+# Data & Submissions
+data/
+submissions/
+submission.csv
 
 # Secrets & Environment
 .env

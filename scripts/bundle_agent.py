@@ -20,6 +20,8 @@ MODULES_TO_INLINE = [
     ROOT / "src" / "arc_core" / "contracts.py",
     ROOT / "src" / "arc_agent" / "legality_adapter.py",
     ROOT / "src" / "arc_agent" / "perception" / "layered_perception.py",
+    ROOT / "src" / "arc_agent" / "perception" / "cognitive_hierarchy.py",
+    ROOT / "src" / "arc_agent" / "memory" / "reasoning_state.py",
     ROOT / "src" / "arc_agent" / "world_model" / "belief_state.py",
     ROOT / "src" / "arc_agent" / "planning" / "epistemic_policy.py",
     ROOT / "src" / "arc_agent" / "memory" / "scoped_memory.py",

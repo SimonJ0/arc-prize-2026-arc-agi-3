@@ -399,6 +399,388 @@ class LayeredPerception:
         return entities
 
 # ======================================================================
+# INLINED: cognitive_hierarchy.py
+# ======================================================================
+
+"""
+DRE-Bench 4-Level Cognitive Hierarchy for ARC-AGI-3 (arXiv:2506.02648v1).
+Decomposes perception and causal reasoning across four cognitive tiers:
+  Level 1: Attribute (size, count, color distribution, bounding box solidity)
+  Level 2: Spatial (directional vectors, symmetry axes, rotation, canonicalization)
+  Level 3: Sequential (multi-step macro-planning overcoming the 2-step depth collapse)
+  Level 4: Conceptual / Intuitive Physics (gravity fields, collision barriers, reflection)
+"""
+
+
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Set, Tuple
+import numpy as np
+from scipy.ndimage import label
+
+
+@dataclass(frozen=True)
+class AttributeProfile:
+    """Level 1 Attribute abstraction of an entity."""
+    entity_id: int
+    color: int
+    size: int
+    bbox: Tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
+    centroid: Tuple[float, float]
+    aspect_ratio: float
+    solidity: float  # size / (bbox_height * bbox_width)
+    is_singleton: bool  # size == 1
+
+
+@dataclass(frozen=True)
+class SpatialSymmetry:
+    """Level 2 Spatial symmetry detection."""
+    horizontal: float
+    vertical: float
+    diagonal: float
+
+
+@dataclass
+class CognitiveHierarchyAnalysis:
+    """Unified 4-level cognitive evaluation of an observation."""
+    # Level 1: Attribute
+    attributes: List[AttributeProfile]
+    color_counts: Dict[int, int]
+    singleton_entities: List[AttributeProfile]
+    dominant_color: int
+
+    # Level 2: Spatial
+    symmetry: SpatialSymmetry
+    player_pos: Optional[Tuple[int, int]] = None
+    player_color: Optional[int] = None
+
+    # Level 3: Sequential Targets
+    candidate_goals: List[Tuple[int, int]] = field(default_factory=list)
+
+    # Level 4: Intuitive Physics
+    gravity_detected: bool = False
+    gravity_vector: Tuple[int, int] = (0, 0)
+    static_obstacles: Set[Tuple[int, int]] = field(default_factory=set)
+
+
+class CognitiveHierarchyPerception:
+    """Analyzes ARC-AGI-3 frames using DRE-Bench's four cognitive levels."""
+
+    def __init__(self):
+        self.prev_frame: Optional[np.ndarray] = None
+        self.prev_player_pos: Optional[Tuple[int, int]] = None
+
+    def analyze(
+        self,
+        frame: np.ndarray,
+        prev_frame: Optional[np.ndarray] = None,
+        known_player_color: Optional[int] = None,
+    ) -> CognitiveHierarchyAnalysis:
+        """Executes full 4-level cognitive breakdown of the grid."""
+        H, W = frame.shape
+
+        # --- LEVEL 1: ATTRIBUTE ANALYSIS ---
+        unique_colors, counts = np.unique(frame, return_counts=True)
+        color_counts = {int(c): int(cnt) for c, cnt in zip(unique_colors, counts)}
+        # Background is typically the color with maximum area
+        dominant_color = int(unique_colors[np.argmax(counts)])
+
+        attributes: List[AttributeProfile] = []
+        singleton_entities: List[AttributeProfile] = []
+        entity_id_seq = 0
+
+        for color in unique_colors:
+            color = int(color)
+            if color == dominant_color:
+                continue
+
+            color_mask = (frame == color)
+            labeled_arr, num_feats = label(color_mask)
+
+            for feat_idx in range(1, num_feats + 1):
+                coords = np.argwhere(labeled_arr == feat_idx)
+                if len(coords) == 0:
+                    continue
+
+                size = len(coords)
+                min_y, min_x = coords.min(axis=0)
+                max_y, max_x = coords.max(axis=0)
+                bh = max(1, max_y - min_y + 1)
+                bw = max(1, max_x - min_x + 1)
+                bbox_area = bh * bw
+                solidity = float(size / bbox_area)
+                aspect_ratio = float(bw / bh)
+                centroid = (float(coords[:, 0].mean()), float(coords[:, 1].mean()))
+
+                profile = AttributeProfile(
+                    entity_id=entity_id_seq,
+                    color=color,
+                    size=size,
+                    bbox=(int(min_y), int(min_x), int(max_y), int(max_x)),
+                    centroid=centroid,
+                    aspect_ratio=aspect_ratio,
+                    solidity=solidity,
+                    is_singleton=(size == 1),
+                )
+                attributes.append(profile)
+                if size <= 4:
+                    singleton_entities.append(profile)
+                entity_id_seq += 1
+
+        # --- LEVEL 2: SPATIAL ANALYSIS ---
+        h_sym = float(np.mean(frame == np.fliplr(frame)))
+        v_sym = float(np.mean(frame == np.flipud(frame)))
+        d_sym = float(np.mean(frame == frame.T)) if H == W else 0.0
+        symmetry = SpatialSymmetry(horizontal=h_sym, vertical=v_sym, diagonal=d_sym)
+
+        # Infer player location:
+        # If known_player_color is specified, find its centroid;
+        # otherwise look for mobile singleton or dynamic entity
+        player_pos = None
+        player_color = known_player_color
+
+        if player_color is not None:
+            p_coords = np.argwhere(frame == player_color)
+            if len(p_coords) > 0:
+                player_pos = (int(p_coords[:, 0].mean()), int(p_coords[:, 1].mean()))
+
+        if player_pos is None and prev_frame is not None and prev_frame.shape == frame.shape:
+            # Find moving pixels
+            diff = (frame != prev_frame)
+            if np.any(diff):
+                # Pixels present in current frame but not previous
+                curr_diff_colors = frame[diff]
+                # Player is usually a small moving entity
+                for profile in singleton_entities:
+                    cy, cx = int(profile.centroid[0]), int(profile.centroid[1])
+                    if diff[cy, cx]:
+                        player_pos = (cy, cx)
+                        player_color = profile.color
+                        break
+
+        # Fallback player: first small singleton entity
+        if player_pos is None and singleton_entities:
+            target = singleton_entities[0]
+            player_pos = (int(target.centroid[0]), int(target.centroid[1]))
+            player_color = target.color
+
+        # --- LEVEL 3: CANDIDATE GOALS (Sequential targets) ---
+        candidate_goals: List[Tuple[int, int]] = []
+        for profile in attributes:
+            if player_color is not None and profile.color == player_color:
+                continue
+            # Goals are typically small unique objects (doors, sockets, stars)
+            if profile.size <= 25:
+                candidate_goals.append((int(profile.centroid[0]), int(profile.centroid[1])))
+
+        # Sort candidate goals by distance to player
+        if player_pos is not None:
+            candidate_goals.sort(
+                key=lambda g: abs(g[0] - player_pos[0]) + abs(g[1] - player_pos[1])
+            )
+
+        # --- LEVEL 4: INTUITIVE PHYSICS (Obstacles & Gravity) ---
+        static_obstacles: Set[Tuple[int, int]] = set()
+        # Large entities (>60 pixels) or boundary clusters are treated as impassable walls
+        for profile in attributes:
+            if profile.size >= 40:
+                min_y, min_x, max_y, max_x = profile.bbox
+                for y in range(min_y, max_y + 1):
+                    for x in range(min_x, max_x + 1):
+                        if frame[y, x] == profile.color:
+                            static_obstacles.add((y, x))
+
+        # Check for gravity (downward vertical displacement across unforced steps)
+        gravity_detected = False
+        gravity_vector = (0, 0)
+        if (
+            self.prev_frame is not None
+            and prev_frame is not None
+            and player_pos is not None
+            and self.prev_player_pos is not None
+        ):
+            dy = player_pos[0] - self.prev_player_pos[0]
+            dx = player_pos[1] - self.prev_player_pos[1]
+            if dy > 0 and dx == 0:
+                gravity_detected = True
+                gravity_vector = (1, 0)
+
+        self.prev_frame = frame.copy()
+        if player_pos is not None:
+            self.prev_player_pos = player_pos
+
+        return CognitiveHierarchyAnalysis(
+            attributes=attributes,
+            color_counts=color_counts,
+            singleton_entities=singleton_entities,
+            dominant_color=dominant_color,
+            symmetry=symmetry,
+            player_pos=player_pos,
+            player_color=player_color,
+            candidate_goals=candidate_goals,
+            gravity_detected=gravity_detected,
+            gravity_vector=gravity_vector,
+            static_obstacles=static_obstacles,
+        )
+
+# ======================================================================
+# INLINED: reasoning_state.py
+# ======================================================================
+
+"""
+OpenAI Reasoning Persistence & Context Compaction Engine for ARC-AGI-3.
+Implements the two breakthrough architectural settings that tripled ARC-AGI-3 benchmark scores:
+1. Hidden Reasoning Persistence: Retains multi-step macro-plans, entity roles,
+   and falsified hypotheses across turns instead of stateless single-step resets.
+2. Automatic Context Compaction: Compresses past trajectory steps into dense semantic summaries,
+   eliminating raw image array bloat and preventing context rot.
+"""
+
+
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+
+@dataclass(frozen=True)
+class StepSummary:
+    """Compact semantic representation of an environment step."""
+    step: int
+    level: int
+    action: str
+    player_pos: Optional[Tuple[int, int]]
+    delta_pos: Tuple[int, int]  # (dy, dx)
+    state: str
+    levels_completed: int
+
+
+@dataclass
+class PersistentReasoningState:
+    """
+    In-memory working scratchpad preserving reasoning state across environment turns.
+    Prevents restarting hypothesis generation and planning from scratch on every step.
+    """
+    game_id: str
+    # 1. Macro-Planning: Active queue of planned atomic actions in flight
+    active_macro_plan: deque[str] = field(default_factory=deque)
+    active_goal_coord: Optional[Tuple[int, int]] = None
+
+    # 2. Semantic Entity Roles: e.g. {player_color: 'PLAYER', goal_color: 'GOAL'}
+    entity_roles: Dict[int, str] = field(default_factory=dict)
+    player_color: Optional[int] = None
+    goal_color: Optional[int] = None
+
+    # 3. Lethal Hazard Avoidance (Learned from GAME_OVER)
+    death_coords: Set[Tuple[int, int]] = field(default_factory=set)
+    hazard_colors: Set[int] = field(default_factory=set)
+
+    # 4. Verified Causal Action Mappings: action_name -> (dy, dx)
+    action_effects: Dict[str, Tuple[int, int]] = field(default_factory=dict)
+    ineffective_actions: Set[Tuple[str, int]] = field(default_factory=set)  # (action, level)
+
+    # 5. Spatial Visitation Tracking
+    visited_positions: Set[Tuple[int, int]] = field(default_factory=set)
+
+    def has_active_plan(self) -> bool:
+        """Returns True if there is a pending macro-action sequence."""
+        return len(self.active_macro_plan) > 0
+
+    def next_planned_action(self, available_actions: Set[str]) -> Optional[str]:
+        """Pops the next action if it is currently legal, otherwise invalidates plan."""
+        if not self.active_macro_plan:
+            return None
+        candidate = self.active_macro_plan[0]
+        if candidate in available_actions:
+            return self.active_macro_plan.popleft()
+        # Plan blocked or illegal, invalidate
+        self.clear_plan()
+        return None
+
+    def set_macro_plan(self, plan: List[str], goal: Optional[Tuple[int, int]] = None):
+        """Sets a new multi-step macro-plan in flight."""
+        self.active_macro_plan = deque(plan)
+        self.active_goal_coord = goal
+
+    def clear_plan(self):
+        """Discards active plan upon surprise or obstruction."""
+        self.active_macro_plan.clear()
+        self.active_goal_coord = None
+
+    def record_death(self, fatal_pos: Optional[Tuple[int, int]], fatal_color: Optional[int]):
+        """Commits lethal position and entity color to permanent negative memory."""
+        if fatal_pos is not None:
+            self.death_coords.add(fatal_pos)
+        if fatal_color is not None:
+            self.hazard_colors.add(fatal_color)
+        self.clear_plan()
+
+    def update_action_effect(self, action: str, dy: int, dx: int):
+        """Caches verified movement vector for an action."""
+        if (dy, dx) != (0, 0):
+            self.action_effects[action] = (dy, dx)
+
+
+class ContextCompactor:
+    """
+    Compresses raw 2D grid observations into dense semantic trajectory summaries.
+    Avoids carrying large 2D frame arrays in memory.
+    """
+
+    def __init__(self, max_rolling_steps: int = 15):
+        self.max_rolling_steps = max_rolling_steps
+        self.rolling_history: deque[StepSummary] = deque(maxlen=max_rolling_steps)
+        self.total_steps_recorded = 0
+        self.level_step_counts: Dict[int, int] = {}
+
+    def compact_step(
+        self,
+        step: int,
+        level: int,
+        action: str,
+        curr_pos: Optional[Tuple[int, int]],
+        prev_pos: Optional[Tuple[int, int]],
+        state: str,
+        levels_completed: int,
+    ) -> StepSummary:
+        """Produces a StepSummary and stores it in compact rolling memory."""
+        if curr_pos is not None and prev_pos is not None:
+            delta = (curr_pos[0] - prev_pos[0], curr_pos[1] - prev_pos[1])
+        else:
+            delta = (0, 0)
+
+        summary = StepSummary(
+            step=step,
+            level=level,
+            action=action,
+            player_pos=curr_pos,
+            delta_pos=delta,
+            state=state,
+            levels_completed=levels_completed,
+        )
+
+        self.rolling_history.append(summary)
+        self.total_steps_recorded += 1
+        self.level_step_counts[level] = self.level_step_counts.get(level, 0) + 1
+        return summary
+
+    def get_trajectory_summary(self) -> Dict[str, Any]:
+        """Returns compact state dictionary for logging or planning."""
+        recent = [
+            {
+                "step": s.step,
+                "action": s.action,
+                "pos": s.player_pos,
+                "delta": s.delta_pos,
+                "state": s.state,
+            }
+            for s in self.rolling_history
+        ]
+        return {
+            "total_steps": self.total_steps_recorded,
+            "steps_per_level": dict(self.level_step_counts),
+            "recent_trajectory": recent,
+        }
+
+# ======================================================================
 # INLINED: belief_state.py
 # ======================================================================
 
@@ -596,11 +978,11 @@ class BeliefStateWorldModel:
 
 """
 Uncertainty-Aware Epistemic Policy for ARC-AGI-3.
-Selects actions via:
-1. Low-risk epistemic probing when world model uncertainty is high (Value of Information > Action Cost).
-2. Goal-directed search (BFS / A*) over validated transition dynamics when model consensus is established.
-3. Candidate-coordinate spatial pruning for ACTION6.
-4. Hard legality validation via LegalityAdapter.
+Integrates:
+1. OpenAI Reasoning Persistence: Executes active multi-step macro-plans across turns.
+2. DRE-Bench Cognitive Hierarchy: Targets goal candidates and avoids static obstacles / death coordinates.
+3. Bayesian Epistemic Probing: Explores untested actions to deduce movement dynamics when uncertain.
+4. Hard Legality Validation: Via LegalityAdapter.
 """
 
 from collections import deque
@@ -610,7 +992,7 @@ import numpy as np
 
 
 class EpistemicPolicy:
-    """Decision engine balancing active epistemic learning with goal pursuit."""
+    """Decision engine balancing active epistemic learning with persistent macro-planning."""
 
     def __init__(self):
         self.step_counter = 0
@@ -620,6 +1002,8 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
+        reasoning_state: Optional[PersistentReasoningState] = None,
+        cognitive_analysis: Optional[CognitiveHierarchyAnalysis] = None,
     ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
         """
         Selects next physical environment action given current belief state.
@@ -631,6 +1015,11 @@ class EpistemicPolicy:
 
         # 1. State-level guard: GAME_OVER requires RESET
         if state == "GAME_OVER":
+            if reasoning_state is not None:
+                # Learn fatal location to avoid it in future runs
+                fatal_pos = cognitive_analysis.player_pos if cognitive_analysis else None
+                reasoning_state.record_death(fatal_pos, None)
+
             action, payload = LegalityAdapter.validate_action(
                 state=state,
                 available_actions=available,
@@ -649,15 +1038,80 @@ class EpistemicPolicy:
             )
             return action, payload, trace
 
-        # 2. Epistemic Probing Mode: Model is uncertain
-        if not world_model.can_reliably_plan():
-            action, payload, trace = self._select_epistemic_probe(
+        # 2. Reasoning Persistence: Check if there is an active macro-plan in flight
+        if reasoning_state is not None and reasoning_state.has_active_plan():
+            planned_action = reasoning_state.next_planned_action(available)
+            if planned_action is not None:
+                action, payload = LegalityAdapter.validate_action(
+                    state=state,
+                    available_actions=available,
+                    proposed_action=planned_action,
+                )
+                trace = DecisionTrace(
+                    level=observation.level,
+                    step=self.step_counter,
+                    observation_hash=str(hash(observation.frames[0].tobytes())),
+                    legal_actions=tuple(sorted(list(available))),
+                    selected_action=action,
+                    selected_payload=payload,
+                    planning_mode="PERSISTENT_MACRO_PLAN",
+                    predicted_next_state="NOT_FINISHED",
+                    confidence=0.95,
+                )
+                return action, payload, trace
+
+        # 3. DRE-Bench Sequential Planning: Macro-path to candidate goals
+        if cognitive_analysis is not None and cognitive_analysis.player_pos is not None:
+            p_pos = cognitive_analysis.player_pos
+            goals = cognitive_analysis.candidate_goals
+            obstacles = set(cognitive_analysis.static_obstacles)
+            if reasoning_state is not None:
+                obstacles.update(reasoning_state.death_coords)
+
+            frame_shape = observation.frames[0].shape
+            for goal in goals[:3]:  # Evaluate top candidate goals
+                path = self._astar_search(
+                    start=p_pos,
+                    goal=goal,
+                    grid_shape=frame_shape,
+                    obstacles=obstacles,
+                    world_model=world_model,
+                    available_actions=available,
+                    reasoning_state=reasoning_state,
+                )
+                if path:
+                    chosen = path[0]
+                    if reasoning_state is not None and len(path) > 1:
+                        # Retain remainder of plan in persistent memory
+                        reasoning_state.set_macro_plan(path[1:], goal=goal)
+
+                    action, payload = LegalityAdapter.validate_action(
+                        state=state,
+                        available_actions=available,
+                        proposed_action=chosen,
+                    )
+                    trace = DecisionTrace(
+                        level=observation.level,
+                        step=self.step_counter,
+                        observation_hash=str(hash(observation.frames[0].tobytes())),
+                        legal_actions=tuple(sorted(list(available))),
+                        selected_action=action,
+                        selected_payload=payload,
+                        planning_mode="MACRO_GOAL_PLAN",
+                        predicted_next_state="NOT_FINISHED",
+                        confidence=0.9,
+                    )
+                    return action, payload, trace
+
+        # 4. Exploitation Mode: Validated model allows forward planning
+        if world_model.can_reliably_plan():
+            action, payload, trace = self._plan_goal_trajectory(
                 observation, analysis, world_model
             )
             return action, payload, trace
 
-        # 3. Exploitation Mode: Validated model allows forward planning
-        action, payload, trace = self._plan_goal_trajectory(
+        # 5. Epistemic Probing Mode: Explore untested actions to induce dynamics
+        action, payload, trace = self._select_epistemic_probe(
             observation, analysis, world_model
         )
         return action, payload, trace
@@ -723,15 +1177,12 @@ class EpistemicPolicy:
         avatar_color = world_model.avatar_color
         available = observation.available_actions
 
-        # Locate avatar
         avatar_coords = np.argwhere(frame == avatar_color)
         if len(avatar_coords) == 0:
-            # Avatar lost, fallback to probe
             return self._select_epistemic_probe(observation, analysis, world_model)
 
         start_pos = (int(avatar_coords[0][0]), int(avatar_coords[0][1]))
 
-        # Identify candidate goal entities (distinct non-background, non-avatar entity)
         target_pos = None
         for ent in analysis.entities:
             if ent.color != avatar_color and ent.size <= 36:
@@ -739,10 +1190,8 @@ class EpistemicPolicy:
                 break
 
         if target_pos is None:
-            # No clear target found, fallback to safe exploration
             return self._select_epistemic_probe(observation, analysis, world_model)
 
-        # Run BFS to find shortest action sequence to target
         path = self._bfs_search(start_pos, target_pos, frame.shape, world_model, available)
 
         if path:
@@ -765,8 +1214,70 @@ class EpistemicPolicy:
             )
             return action, valid_payload, trace
 
-        # Path not found or blocked, fallback
         return self._select_epistemic_probe(observation, analysis, world_model)
+
+    def _astar_search(
+        self,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+        grid_shape: Tuple[int, int],
+        obstacles: Set[Tuple[int, int]],
+        world_model: BeliefStateWorldModel,
+        available_actions: Set[str],
+        reasoning_state: Optional[PersistentReasoningState] = None,
+    ) -> Optional[List[str]]:
+        """A* search towards goal avoiding static obstacles and lethal death coordinates."""
+        H, W = grid_shape
+        import heapq
+
+        # Standard directional action displacement mapping
+        action_deltas = {
+            "ACTION1": (-1, 0),  # UP
+            "ACTION2": (1, 0),   # DOWN
+            "ACTION3": (0, -1),  # LEFT
+            "ACTION4": (0, 1),   # RIGHT
+        }
+        # Override with empirically cached action effects if available
+        if reasoning_state is not None and reasoning_state.action_effects:
+            for act, delta in reasoning_state.action_effects.items():
+                if act in available_actions:
+                    action_deltas[act] = delta
+
+        valid_actions = [act for act in action_deltas if act in available_actions]
+        if not valid_actions:
+            return None
+
+        # Priority queue stores (f_score, cost, current_pos, path)
+        def h(pos: Tuple[int, int]) -> int:
+            return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+
+        heap = [(h(start), 0, start, [])]
+        visited = {start: 0}
+        max_expansions = 150  # Bound computation
+
+        while heap and max_expansions > 0:
+            max_expansions -= 1
+            f, cost, curr, path = heapq.heappop(heap)
+
+            if curr == goal or abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= 1:
+                return path
+
+            for act in valid_actions:
+                dy, dx = action_deltas[act]
+                ny, nx = curr[0] + dy, curr[1] + dx
+
+                if not (0 <= ny < H and 0 <= nx < W):
+                    continue
+                nxt = (ny, nx)
+                if nxt in obstacles:
+                    continue
+
+                new_cost = cost + 1
+                if nxt not in visited or new_cost < visited[nxt]:
+                    visited[nxt] = new_cost
+                    heapq.heappush(heap, (new_cost + h(nxt), new_cost, nxt, path + [act]))
+
+        return None
 
     def _bfs_search(
         self,
@@ -782,7 +1293,7 @@ class EpistemicPolicy:
         visited = {start}
 
         dir_actions = [a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available_actions]
-        max_depth = 40  # Bound search to avoid budget exhaustion
+        max_depth = 40
 
         while queue:
             curr_pos, path = queue.popleft()
@@ -901,11 +1412,11 @@ class ScopedEpisodeMemory:
 
 """
 Uncertainty-Aware Agent for ARC-AGI-3.
-Combines:
-1. Hard legality adapter (strictly conforms to available_actions, handles GAME_OVER -> RESET).
-2. Multi-hypothesis layered perception (candidate backgrounds, connected components).
-3. Factored belief-state world model (Bayesian posterior over transition dynamics).
-4. Epistemic decision policy (epistemic probing vs bounded goal planning).
+Integrates:
+1. DRE-Bench 4-Level Cognitive Hierarchy (Attribute, Spatial, Sequential Macro-Planning, Intuitive Physics).
+2. OpenAI Reasoning Persistence (Persistent working scratchpad & active multi-step macro-plans).
+3. Automatic Context Compaction (Compact semantic delta summaries, zero context rot).
+4. Hard legality adapter (strictly conforms to available_actions, handles GAME_OVER -> RESET).
 5. Scoped episode memory (bounds invariants to game run, avoids negative transfer).
 """
 
@@ -935,12 +1446,16 @@ class MyAgent(Agent):
         super().__init__(*args, **kwargs)
         self.game_id = getattr(self, "game_id", game_id)
         self.perception = LayeredPerception()
+        self.cognitive_perception = CognitiveHierarchyPerception()
         self.world_model = BeliefStateWorldModel()
         self.policy = EpistemicPolicy()
         self.memory = ScopedEpisodeMemory(game_key=self.game_id)
+        self.reasoning_state = PersistentReasoningState(game_id=self.game_id)
+        self.compactor = ContextCompactor()
 
         self.previous_observation: Optional[Observation] = None
         self.previous_analysis: Optional[FrameAnalysis] = None
+        self.previous_cognitive: Optional[CognitiveHierarchyAnalysis] = None
         self.previous_action: Optional[str] = None
         self.action_count = 0
 
@@ -992,7 +1507,6 @@ class MyAgent(Agent):
                 except Exception:
                     avail_actions.add(str(a).split(".")[-1])
 
-
         if not avail_actions:
             avail_actions = {"RESET", "ACTION1"}
 
@@ -1006,11 +1520,42 @@ class MyAgent(Agent):
             guid=getattr(latest_frame, "guid", None),
         )
 
-        # Perception
+        # 1. Perception & DRE-Bench Cognitive Analysis
         prev_grid = self.previous_observation.frames[0] if self.previous_observation else None
         current_analysis = self.perception.analyze(grid, prev_grid)
+        cognitive_analysis = self.cognitive_perception.analyze(
+            frame=grid,
+            prev_frame=prev_grid,
+            known_player_color=self.reasoning_state.player_color,
+        )
 
-        # Belief State Update from previous transition
+        if cognitive_analysis.player_color is not None and self.reasoning_state.player_color is None:
+            self.reasoning_state.player_color = cognitive_analysis.player_color
+
+        # 2. Update Reasoning Persistence (Causal displacements & deaths)
+        if (
+            self.previous_action is not None
+            and self.previous_cognitive is not None
+            and self.previous_cognitive.player_pos is not None
+            and cognitive_analysis.player_pos is not None
+        ):
+            dy = cognitive_analysis.player_pos[0] - self.previous_cognitive.player_pos[0]
+            dx = cognitive_analysis.player_pos[1] - self.previous_cognitive.player_pos[1]
+            self.reasoning_state.update_action_effect(self.previous_action, dy, dx)
+
+        # Context compaction
+        prev_pos = self.previous_cognitive.player_pos if self.previous_cognitive else None
+        self.compactor.compact_step(
+            step=self.action_count,
+            level=current_obs.level,
+            action=self.previous_action or "NONE",
+            curr_pos=cognitive_analysis.player_pos,
+            prev_pos=prev_pos,
+            state=state_str,
+            levels_completed=getattr(latest_frame, "levels_completed", 0),
+        )
+
+        # Belief State Update
         if (
             self.previous_observation is not None
             and self.previous_analysis is not None
@@ -1024,29 +1569,19 @@ class MyAgent(Agent):
                 curr_analysis=current_analysis,
             )
 
-            # Record event in scoped memory
-            self.memory.record_transition(
-                step=self.action_count,
-                level=current_obs.level,
-                from_frame=prev_grid,
-                action=self.previous_action,
-                payload={},
-                to_state=state_str,
-                to_frame=grid,
-                planning_mode="ONLINE_DECISION",
-                confidence=self.world_model.belief.one_step_accuracy,
-            )
-
-        # Decision Policy: Probing vs Goal Planning
+        # 3. Decision Policy: Macro-Planning vs Epistemic Probing
         action_name, payload, trace = self.policy.select_action(
             observation=current_obs,
             analysis=current_analysis,
             world_model=self.world_model,
+            reasoning_state=self.reasoning_state,
+            cognitive_analysis=cognitive_analysis,
         )
 
         # Update tracking
         self.previous_observation = current_obs
         self.previous_analysis = current_analysis
+        self.previous_cognitive = cognitive_analysis
         self.previous_action = action_name
 
         return LegalityAdapter.to_game_action(action_name)

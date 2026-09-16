@@ -1,10 +1,10 @@
 """
 Uncertainty-Aware Epistemic Policy for ARC-AGI-3.
-Selects actions via:
-1. Low-risk epistemic probing when world model uncertainty is high (Value of Information > Action Cost).
-2. Goal-directed search (BFS / A*) over validated transition dynamics when model consensus is established.
-3. Candidate-coordinate spatial pruning for ACTION6.
-4. Hard legality validation via LegalityAdapter.
+Integrates:
+1. OpenAI Reasoning Persistence: Executes active multi-step macro-plans across turns.
+2. DRE-Bench Cognitive Hierarchy: Targets goal candidates and avoids static obstacles / death coordinates.
+3. Bayesian Epistemic Probing: Explores untested actions to deduce movement dynamics when uncertain.
+4. Hard Legality Validation: Via LegalityAdapter.
 """
 
 from collections import deque
@@ -15,10 +15,12 @@ from src.arc_core.contracts import ActionProposal, DecisionTrace, Observation
 from src.arc_agent.legality_adapter import LegalityAdapter
 from src.arc_agent.perception.layered_perception import FrameAnalysis
 from src.arc_agent.world_model.belief_state import BeliefStateWorldModel
+from src.arc_agent.perception.cognitive_hierarchy import CognitiveHierarchyAnalysis
+from src.arc_agent.memory.reasoning_state import PersistentReasoningState
 
 
 class EpistemicPolicy:
-    """Decision engine balancing active epistemic learning with goal pursuit."""
+    """Decision engine balancing active epistemic learning with persistent macro-planning."""
 
     def __init__(self):
         self.step_counter = 0
@@ -28,6 +30,8 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
+        reasoning_state: Optional[PersistentReasoningState] = None,
+        cognitive_analysis: Optional[CognitiveHierarchyAnalysis] = None,
     ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
         """
         Selects next physical environment action given current belief state.
@@ -39,6 +43,11 @@ class EpistemicPolicy:
 
         # 1. State-level guard: GAME_OVER requires RESET
         if state == "GAME_OVER":
+            if reasoning_state is not None:
+                # Learn fatal location to avoid it in future runs
+                fatal_pos = cognitive_analysis.player_pos if cognitive_analysis else None
+                reasoning_state.record_death(fatal_pos, None)
+
             action, payload = LegalityAdapter.validate_action(
                 state=state,
                 available_actions=available,
@@ -57,15 +66,80 @@ class EpistemicPolicy:
             )
             return action, payload, trace
 
-        # 2. Epistemic Probing Mode: Model is uncertain
-        if not world_model.can_reliably_plan():
-            action, payload, trace = self._select_epistemic_probe(
+        # 2. Reasoning Persistence: Check if there is an active macro-plan in flight
+        if reasoning_state is not None and reasoning_state.has_active_plan():
+            planned_action = reasoning_state.next_planned_action(available)
+            if planned_action is not None:
+                action, payload = LegalityAdapter.validate_action(
+                    state=state,
+                    available_actions=available,
+                    proposed_action=planned_action,
+                )
+                trace = DecisionTrace(
+                    level=observation.level,
+                    step=self.step_counter,
+                    observation_hash=str(hash(observation.frames[0].tobytes())),
+                    legal_actions=tuple(sorted(list(available))),
+                    selected_action=action,
+                    selected_payload=payload,
+                    planning_mode="PERSISTENT_MACRO_PLAN",
+                    predicted_next_state="NOT_FINISHED",
+                    confidence=0.95,
+                )
+                return action, payload, trace
+
+        # 3. DRE-Bench Sequential Planning: Macro-path to candidate goals
+        if cognitive_analysis is not None and cognitive_analysis.player_pos is not None:
+            p_pos = cognitive_analysis.player_pos
+            goals = cognitive_analysis.candidate_goals
+            obstacles = set(cognitive_analysis.static_obstacles)
+            if reasoning_state is not None:
+                obstacles.update(reasoning_state.death_coords)
+
+            frame_shape = observation.frames[0].shape
+            for goal in goals[:3]:  # Evaluate top candidate goals
+                path = self._astar_search(
+                    start=p_pos,
+                    goal=goal,
+                    grid_shape=frame_shape,
+                    obstacles=obstacles,
+                    world_model=world_model,
+                    available_actions=available,
+                    reasoning_state=reasoning_state,
+                )
+                if path:
+                    chosen = path[0]
+                    if reasoning_state is not None and len(path) > 1:
+                        # Retain remainder of plan in persistent memory
+                        reasoning_state.set_macro_plan(path[1:], goal=goal)
+
+                    action, payload = LegalityAdapter.validate_action(
+                        state=state,
+                        available_actions=available,
+                        proposed_action=chosen,
+                    )
+                    trace = DecisionTrace(
+                        level=observation.level,
+                        step=self.step_counter,
+                        observation_hash=str(hash(observation.frames[0].tobytes())),
+                        legal_actions=tuple(sorted(list(available))),
+                        selected_action=action,
+                        selected_payload=payload,
+                        planning_mode="MACRO_GOAL_PLAN",
+                        predicted_next_state="NOT_FINISHED",
+                        confidence=0.9,
+                    )
+                    return action, payload, trace
+
+        # 4. Exploitation Mode: Validated model allows forward planning
+        if world_model.can_reliably_plan():
+            action, payload, trace = self._plan_goal_trajectory(
                 observation, analysis, world_model
             )
             return action, payload, trace
 
-        # 3. Exploitation Mode: Validated model allows forward planning
-        action, payload, trace = self._plan_goal_trajectory(
+        # 5. Epistemic Probing Mode: Explore untested actions to induce dynamics
+        action, payload, trace = self._select_epistemic_probe(
             observation, analysis, world_model
         )
         return action, payload, trace
@@ -131,15 +205,12 @@ class EpistemicPolicy:
         avatar_color = world_model.avatar_color
         available = observation.available_actions
 
-        # Locate avatar
         avatar_coords = np.argwhere(frame == avatar_color)
         if len(avatar_coords) == 0:
-            # Avatar lost, fallback to probe
             return self._select_epistemic_probe(observation, analysis, world_model)
 
         start_pos = (int(avatar_coords[0][0]), int(avatar_coords[0][1]))
 
-        # Identify candidate goal entities (distinct non-background, non-avatar entity)
         target_pos = None
         for ent in analysis.entities:
             if ent.color != avatar_color and ent.size <= 36:
@@ -147,10 +218,8 @@ class EpistemicPolicy:
                 break
 
         if target_pos is None:
-            # No clear target found, fallback to safe exploration
             return self._select_epistemic_probe(observation, analysis, world_model)
 
-        # Run BFS to find shortest action sequence to target
         path = self._bfs_search(start_pos, target_pos, frame.shape, world_model, available)
 
         if path:
@@ -173,8 +242,70 @@ class EpistemicPolicy:
             )
             return action, valid_payload, trace
 
-        # Path not found or blocked, fallback
         return self._select_epistemic_probe(observation, analysis, world_model)
+
+    def _astar_search(
+        self,
+        start: Tuple[int, int],
+        goal: Tuple[int, int],
+        grid_shape: Tuple[int, int],
+        obstacles: Set[Tuple[int, int]],
+        world_model: BeliefStateWorldModel,
+        available_actions: Set[str],
+        reasoning_state: Optional[PersistentReasoningState] = None,
+    ) -> Optional[List[str]]:
+        """A* search towards goal avoiding static obstacles and lethal death coordinates."""
+        H, W = grid_shape
+        import heapq
+
+        # Standard directional action displacement mapping
+        action_deltas = {
+            "ACTION1": (-1, 0),  # UP
+            "ACTION2": (1, 0),   # DOWN
+            "ACTION3": (0, -1),  # LEFT
+            "ACTION4": (0, 1),   # RIGHT
+        }
+        # Override with empirically cached action effects if available
+        if reasoning_state is not None and reasoning_state.action_effects:
+            for act, delta in reasoning_state.action_effects.items():
+                if act in available_actions:
+                    action_deltas[act] = delta
+
+        valid_actions = [act for act in action_deltas if act in available_actions]
+        if not valid_actions:
+            return None
+
+        # Priority queue stores (f_score, cost, current_pos, path)
+        def h(pos: Tuple[int, int]) -> int:
+            return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+
+        heap = [(h(start), 0, start, [])]
+        visited = {start: 0}
+        max_expansions = 150  # Bound computation
+
+        while heap and max_expansions > 0:
+            max_expansions -= 1
+            f, cost, curr, path = heapq.heappop(heap)
+
+            if curr == goal or abs(curr[0] - goal[0]) + abs(curr[1] - goal[1]) <= 1:
+                return path
+
+            for act in valid_actions:
+                dy, dx = action_deltas[act]
+                ny, nx = curr[0] + dy, curr[1] + dx
+
+                if not (0 <= ny < H and 0 <= nx < W):
+                    continue
+                nxt = (ny, nx)
+                if nxt in obstacles:
+                    continue
+
+                new_cost = cost + 1
+                if nxt not in visited or new_cost < visited[nxt]:
+                    visited[nxt] = new_cost
+                    heapq.heappush(heap, (new_cost + h(nxt), new_cost, nxt, path + [act]))
+
+        return None
 
     def _bfs_search(
         self,
@@ -190,7 +321,7 @@ class EpistemicPolicy:
         visited = {start}
 
         dir_actions = [a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available_actions]
-        max_depth = 40  # Bound search to avoid budget exhaustion
+        max_depth = 40
 
         while queue:
             curr_pos, path = queue.popleft()
