@@ -262,14 +262,15 @@ python cli.py submit --reject "{exp_id}" --reason "Explain reason"
         print("SUCCESS: All pre-upload cryptographic checks verified. Re-verification PASSED.")
         print(f"Pushing notebook to Kaggle: {competition}...")
 
-        # 4. Upload to Kaggle via kaggle CLI
+        # 4. Upload to Kaggle via kaggle CLI module
         kernel_dir = self.notebooks_dir
-        cmd = ["kaggle", "kernels", "push", "-p", str(kernel_dir)]
+        cmd = [sys.executable, "-m", "kaggle", "kernels", "push", "-p", str(kernel_dir)]
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if res.returncode != 0:
                 print(f"Upload failed or Kaggle CLI error:\n{res.stderr or res.stdout}")
                 return {"success": False, "error": res.stderr or res.stdout}
+
 
             print("\n" + "=" * 70)
             print("PHASE A COMPLETE: Notebook successfully pushed to Kaggle.")
