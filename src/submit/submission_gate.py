@@ -292,6 +292,7 @@ python cli.py submit --reject "{exp_id}" --reason "Explain reason"
         script_content = f'''"""Splice bundled agent into notebooks/submission.ipynb."""
 from pathlib import Path
 import json
+from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_SRC = ROOT / "agent" / "bundled_my_agent.py"
@@ -304,35 +305,68 @@ NOTEBOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
 agent_body = AGENT_SRC.read_text(encoding="utf-8")
 
 notebook = {{
-    "cells": [
-        {{
-            "cell_type": "code",
-            "metadata": {{"trusted": True}},
-            "execution_count": None,
-            "outputs": [],
-            "source": "!pip install --no-index --find-links /kaggle/input/competitions/arc-prize-2026-arc-agi-3/arc_agi_3_wheels arc-agi python-dotenv\\n"
-        }},
-        {{
-            "cell_type": "code",
-            "metadata": {{"trusted": True}},
-            "execution_count": None,
-            "outputs": [],
-            "source": "with open('/tmp/my_agent.py', 'w', encoding='utf-8') as f:\\n    f.write(" + json.dumps(agent_body) + ")\\n"
-        }},
-        {{
-            "cell_type": "code",
-            "metadata": {{"trusted": True}},
-            "execution_count": None,
-            "outputs": [],
-            "source": "import os\\n# Kaggle competition execution stub\\n"
-        }}
-    ],
     "metadata": {{
-        "accelerator": "{accelerator}",
-        "language_info": {{"name": "python"}}
+        "kernelspec": {{
+            "language": "python",
+            "display_name": "Python 3",
+            "name": "python3",
+        }},
+        "language_info": {{
+            "name": "python",
+            "mimetype": "text/x-python",
+            "file_extension": ".py",
+            "pygments_lexer": "ipython3",
+        }},
+        "kaggle": {{
+            "accelerator": "nvidiaTeslaT4",
+            "isInternetEnabled": False,
+            "isGpuEnabled": True,
+            "language": "python",
+            "sourceType": "notebook",
+        }},
     }},
     "nbformat": 4,
-    "nbformat_minor": 5
+    "nbformat_minor": 5,
+    "cells": [
+        {{
+            "cell_type": "markdown",
+            "id": "cell-header",
+            "metadata": {{}},
+            "source": "# ARC Prize 2026 Submission",
+        }},
+        {{
+            "cell_type": "code",
+            "id": "cell-install",
+            "metadata": {{"trusted": True}},
+            "execution_count": None,
+            "outputs": [],
+            "source": "!pip install --no-index --find-links /kaggle/input/competitions/arc-prize-2026-arc-agi-3/arc_agi_3_wheels arc-agi python-dotenv\\n",
+        }},
+        {{
+            "cell_type": "code",
+            "id": "cell-agent",
+            "metadata": {{"trusted": True}},
+            "execution_count": None,
+            "outputs": [],
+            "source": "%%writefile /tmp/my_agent.py\\n" + agent_body,
+        }},
+        {{
+            "cell_type": "code",
+            "id": "cell-run",
+            "metadata": {{"trusted": True}},
+            "execution_count": None,
+            "outputs": [],
+            "source": "import os\\n",
+        }},
+        {{
+            "cell_type": "code",
+            "id": "cell-dummy",
+            "metadata": {{"trusted": True}},
+            "execution_count": None,
+            "outputs": [],
+            "source": "import os\\nif not os.getenv('KAGGLE_IS_COMPETITION_RERUN'):\\n    import pandas as pd\\n    pd.DataFrame(data=[['1_0', '1', True, 1]], columns=['row_id', 'game_id', 'end_of_game', 'score']).to_parquet('/kaggle/working/submission.parquet', index=False)\\n",
+        }},
+    ],
 }}
 
 NOTEBOOK_PATH.write_text(json.dumps(notebook, indent=2), encoding="utf-8")
