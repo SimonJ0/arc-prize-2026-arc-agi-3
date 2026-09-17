@@ -3,10 +3,9 @@ TF-IDF Differential Vectorizer and Cross-Feature Engine.
 Computes sparse differential text representations and cosine overlaps.
 """
 
-from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
-from scipy.sparse import hstack, csr_matrix
+from scipy.sparse import csr_matrix, hstack
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import paired_cosine_distances
 
@@ -17,12 +16,12 @@ class TextVectorizer:
     and prompt-response semantic overlaps.
     """
 
-    def __init__(self, max_features: int = 5000, ngram_range: Tuple[int, int] = (1, 2)):
+    def __init__(self, max_features: int = 5000, ngram_range: tuple[int, int] = (1, 2)):
         self.max_features = max_features
         self.ngram_range = ngram_range
-        self.vectorizer: Optional[TfidfVectorizer] = None
+        self.vectorizer: TfidfVectorizer | None = None
 
-    def fit(self, texts: List[str]) -> "TextVectorizer":
+    def fit(self, texts: list[str]) -> "TextVectorizer":
         """Fits shared vocabulary on corpus of prompts and responses."""
         self.vectorizer = TfidfVectorizer(
             max_features=self.max_features,
@@ -57,11 +56,17 @@ class TextVectorizer:
 
         # Compute cosine similarities
         tfidf_prompt = self.vectorizer.transform(df["prompt"])
-        
+
         # 1 - cosine distance = cosine similarity (guard against NaN for zero-norm vectors)
-        sim_prompt_a = np.nan_to_num(1.0 - paired_cosine_distances(tfidf_prompt, tfidf_a), nan=0.0).reshape(-1, 1)
-        sim_prompt_b = np.nan_to_num(1.0 - paired_cosine_distances(tfidf_prompt, tfidf_b), nan=0.0).reshape(-1, 1)
-        sim_ab = np.nan_to_num(1.0 - paired_cosine_distances(tfidf_a, tfidf_b), nan=0.0).reshape(-1, 1)
+        sim_prompt_a = np.nan_to_num(
+            1.0 - paired_cosine_distances(tfidf_prompt, tfidf_a), nan=0.0
+        ).reshape(-1, 1)
+        sim_prompt_b = np.nan_to_num(
+            1.0 - paired_cosine_distances(tfidf_prompt, tfidf_b), nan=0.0
+        ).reshape(-1, 1)
+        sim_ab = np.nan_to_num(1.0 - paired_cosine_distances(tfidf_a, tfidf_b), nan=0.0).reshape(
+            -1, 1
+        )
         sim_diff = (sim_prompt_a - sim_prompt_b).reshape(-1, 1)
 
         extra_features = csr_matrix(np.hstack([sim_prompt_a, sim_prompt_b, sim_ab, sim_diff]))

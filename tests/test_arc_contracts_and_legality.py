@@ -2,17 +2,15 @@
 Unit tests for ARC-AGI-3 domain contracts and legality adapter.
 """
 
+from dataclasses import FrozenInstanceError
+
 import numpy as np
 import pytest
-from arcengine import GameAction, GameState
 
+from src.arc_agent.legality_adapter import LegalityAdapter
 from src.arc_core.contracts import (
     Observation,
-    WorldModelBelief,
-    TransitionModelHypothesis,
-    ActionProposal,
 )
-from src.arc_agent.legality_adapter import LegalityAdapter
 
 
 def test_observation_immutability():
@@ -27,8 +25,8 @@ def test_observation_immutability():
     )
     assert obs.state == "NOT_FINISHED"
     assert "ACTION1" in obs.available_actions
-    with pytest.raises(Exception):
-        obs.state = "WIN"  # Frozen dataclass cannot be mutated
+    with pytest.raises(FrozenInstanceError):
+        obs.state = "WIN"  # type: ignore[misc]  # Frozen dataclass cannot be mutated
 
 
 def test_legality_adapter_game_over_forces_reset():

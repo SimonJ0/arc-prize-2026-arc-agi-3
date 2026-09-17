@@ -9,7 +9,7 @@ Enforces the auditor's prioritized gating hierarchy:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+
 import numpy as np
 
 from src.arc_core.metrics import EnvironmentEvaluation
@@ -20,7 +20,7 @@ class GateEvaluationResult:
     passed: bool
     gate_name: str
     message: str
-    metrics: Dict[str, float]
+    metrics: dict[str, float]
 
 
 class LexicographicGatekeeper:
@@ -40,12 +40,12 @@ class LexicographicGatekeeper:
 
     def evaluate_candidate(
         self,
-        candidate_evals: List[EnvironmentEvaluation],
-        incumbent_evals: Optional[List[EnvironmentEvaluation]],
+        candidate_evals: list[EnvironmentEvaluation],
+        incumbent_evals: list[EnvironmentEvaluation] | None,
         model_fidelity: float,
         illegal_actions_count: int,
-        latencies_ms: List[float],
-    ) -> Tuple[bool, List[GateEvaluationResult]]:
+        latencies_ms: list[float],
+    ) -> tuple[bool, list[GateEvaluationResult]]:
         """
         Runs the candidate through the lexicographic gate cascade.
         Returns (all_passed, results_list).

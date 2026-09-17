@@ -3,10 +3,11 @@ Unit tests for feature extraction, multi-turn dialogue decoding, and symmetry du
 """
 
 import json
+
 import numpy as np
 import pandas as pd
-import pytest
-from src.features.extractor import FeatureExtractor, safe_parse_dialogue, compute_turn_metrics
+
+from src.features.extractor import FeatureExtractor, safe_parse_dialogue
 
 
 def test_safe_parse_dialogue():
@@ -32,17 +33,25 @@ def test_safe_parse_dialogue():
 
 def test_feature_extractor_symmetry():
     extractor = FeatureExtractor()
-    df = pd.DataFrame([{
-        "prompt": json.dumps(["What is Python?", "How do you define a function?"]),
-        "response_a": json.dumps([
-            "Python is a programming language. ```python\nprint(1)\n```",
-            "Here is how: | function | syntax |\n|---|---|\n| def | def foo(): pass |"
-        ]),
-        "response_b": json.dumps([
-            "Short answer turn 1.",
-            "Short answer turn 2 with apology: I apologize for being brief."
-        ]),
-    }])
+    df = pd.DataFrame(
+        [
+            {
+                "prompt": json.dumps(["What is Python?", "How do you define a function?"]),
+                "response_a": json.dumps(
+                    [
+                        "Python is a programming language. ```python\nprint(1)\n```",
+                        "Here is how: | function | syntax |\n|---|---|\n| def | def foo(): pass |",
+                    ]
+                ),
+                "response_b": json.dumps(
+                    [
+                        "Short answer turn 1.",
+                        "Short answer turn 2 with apology: I apologize for being brief.",
+                    ]
+                ),
+            }
+        ]
+    )
 
     feats_norm = extractor.extract_features(df)
     feats_swap = extractor.extract_swapped_features(df)

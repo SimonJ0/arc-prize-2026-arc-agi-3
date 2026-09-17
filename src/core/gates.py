@@ -4,12 +4,11 @@ Enforces CV gate, anti-leakage gate, position symmetry gate, ensemble diversity 
 and the 'Iron Rule' submission gate.
 """
 
-from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from src.core.metrics import compute_log_loss, compute_symmetry_divergence, normalize_probabilities
 from src.core.guardrails import AnomalyGuardrail, GateResult
+from src.core.metrics import compute_symmetry_divergence
 
 
 class ValidationGatekeeper:
@@ -82,7 +81,7 @@ class ValidationGatekeeper:
     def check_cv_improvement(
         self,
         candidate_log_loss: float,
-        best_log_loss: Optional[float],
+        best_log_loss: float | None,
         allow_slight_regression_for_diversity: bool = False,
     ) -> GateResult:
         """Gate 2: Verifies OOF Log Loss against baseline."""
@@ -95,33 +94,45 @@ class ValidationGatekeeper:
             )
 
         delta = candidate_log_loss - best_log_loss  # Negative is better
-        
+
         if delta <= -self.min_loss_improvement:
             return GateResult(
                 passed=True,
                 gate_name="CV Gate",
                 message=f"CV IMPROVEMENT: Log loss improved by {-delta:.5f} ({best_log_loss:.5f} -> {candidate_log_loss:.5f})",
-                details={"candidate_loss": candidate_log_loss, "best_loss": best_log_loss, "delta": round(delta, 5)},
+                details={
+                    "candidate_loss": candidate_log_loss,
+                    "best_loss": best_log_loss,
+                    "delta": round(delta, 5),
+                },
             )
         elif allow_slight_regression_for_diversity and delta <= 0.005:
             return GateResult(
                 passed=True,
                 gate_name="CV Gate",
                 message=f"Accepted for ensemble pool (diversity candidate within +{delta:.5f} of best).",
-                details={"candidate_loss": candidate_log_loss, "best_loss": best_log_loss, "delta": round(delta, 5)},
+                details={
+                    "candidate_loss": candidate_log_loss,
+                    "best_loss": best_log_loss,
+                    "delta": round(delta, 5),
+                },
             )
         else:
             return GateResult(
                 passed=False,
                 gate_name="CV Gate",
                 message=f"CV REJECTED: Candidate log loss {candidate_log_loss:.5f} did not beat best {best_log_loss:.5f} (delta: +{delta:.5f})",
-                details={"candidate_loss": candidate_log_loss, "best_loss": best_log_loss, "delta": round(delta, 5)},
+                details={
+                    "candidate_loss": candidate_log_loss,
+                    "best_loss": best_log_loss,
+                    "delta": round(delta, 5),
+                },
             )
 
     def check_symmetry(
         self,
         preds_normal: np.ndarray,
-        preds_swapped: Optional[np.ndarray],
+        preds_swapped: np.ndarray | None,
     ) -> GateResult:
         """Gate 3: Checks position symmetry invariance."""
         if preds_swapped is None:
@@ -144,7 +155,7 @@ class ValidationGatekeeper:
     def check_diversity(
         self,
         candidate_oof: np.ndarray,
-        existing_oofs: List[np.ndarray],
+        existing_oofs: list[np.ndarray],
     ) -> GateResult:
         """Gate 4: Verifies correlation with existing models to prevent redundant ensembling."""
         if not existing_oofs:
@@ -158,7 +169,7 @@ class ValidationGatekeeper:
         cand_flat = candidate_oof.ravel()
         max_corr = 0.0
 
-        for idx, prev_oof in enumerate(existing_oofs):
+        for _idx, prev_oof in enumerate(existing_oofs):
             corr = np.corrcoef(cand_flat, prev_oof.ravel())[0, 1]
             if not np.isnan(corr) and corr > max_corr:
                 max_corr = corr
@@ -178,7 +189,7 @@ class ValidationGatekeeper:
     ) -> GateResult:
         """Gate 5: Strict validation of submission CSV prior to any upload."""
         expected_cols = ["id", "winner_model_a", "winner_model_b", "winner_tie"]
-        
+
         if list(submission_df.columns) != expected_cols:
             return GateResult(
                 passed=False,
@@ -201,7 +212,7 @@ class ValidationGatekeeper:
             )
 
         prob_values = submission_df[["winner_model_a", "winner_model_b", "winner_tie"]].values
-        
+
         if np.isnan(prob_values).any() or np.isinf(prob_values).any():
             return GateResult(
                 passed=False,
@@ -231,6 +242,6 @@ class ValidationGatekeeper:
             details={"rows": len(submission_df)},
         )
 
-    def check_anomalies(self, oof_preds: np.ndarray, fold_losses: List[float]) -> GateResult:
+    def check_anomalies(self, oof_preds: np.ndarray, fold_losses: list[float]) -> GateResult:
         """Gate 5: Checks for validation anomalies, entropy collapse, and fold instability."""
         return self.anomaly_guardrail.check_all(oof_preds, fold_losses)

@@ -7,21 +7,23 @@ and invokes the Cryptographic Iron Rule submission gate upon breakthrough.
 """
 
 from __future__ import annotations
-import json
-from pathlib import Path
-import time
-from typing import Any, Dict, List, Optional, Tuple
-import yaml
 
-from arcengine import GameAction, GameState
-from src.arc_core.metrics import EnvironmentEvaluation, LevelMetric, compute_benchmark_rhae
-from src.arc_core.gating import LexicographicGatekeeper, GateEvaluationResult
-from src.submit.submission_gate import SubmissionAuthorizationGate
+import json
+import time
+from pathlib import Path
+from typing import Any
+
+import yaml
+from arcengine import GameState
+
 from agent.my_agent import MyAgent
-from tests.microworlds.test_movement_induction import GridWorldEnv
-from tests.microworlds.test_reversibility import ReversibleTrapEnv
+from src.arc_core.gating import LexicographicGatekeeper
+from src.arc_core.metrics import EnvironmentEvaluation, LevelMetric, compute_benchmark_rhae
+from src.submit.submission_gate import SubmissionAuthorizationGate
 from tests.microworlds.test_coordinate_selection import TargetClickEnv
 from tests.microworlds.test_delayed_effects import KeyDoorEnv
+from tests.microworlds.test_movement_induction import GridWorldEnv
+from tests.microworlds.test_reversibility import ReversibleTrapEnv
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -37,7 +39,7 @@ class ArcResearchLoop:
         self.config_path = ROOT / config_path
         self.hypotheses_path = ROOT / hypotheses_path
 
-        with open(self.hypotheses_path, "r", encoding="utf-8") as f:
+        with open(self.hypotheses_path, encoding="utf-8") as f:
             self.hypotheses_data = yaml.safe_load(f)
 
         self.gatekeeper = LexicographicGatekeeper()
@@ -50,10 +52,10 @@ class ArcResearchLoop:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
         self.registry = self._load_registry()
-        self.incumbent_evals: Optional[List[EnvironmentEvaluation]] = None
+        self.incumbent_evals: list[EnvironmentEvaluation] | None = None
         self.incumbent_lcb: float = 0.0
 
-    def _load_registry(self) -> Dict[str, Any]:
+    def _load_registry(self) -> dict[str, Any]:
         if self.registry_path.exists():
             try:
                 return json.loads(self.registry_path.read_text(encoding="utf-8"))
@@ -73,7 +75,7 @@ class ArcResearchLoop:
         hypotheses = self.hypotheses_data.get("hypotheses", [])
         for hyp in hypotheses:
             exp_id = hyp["id"]
-            name = hyp["name"]
+            hyp["name"]
 
             # Skip if already evaluated unless forced
             if not force and any(e["exp_id"] == exp_id for e in self.registry["experiments"]):
@@ -84,7 +86,7 @@ class ArcResearchLoop:
 
         self._generate_leaderboard()
 
-    def _run_single_experiment(self, hyp: Dict[str, Any]):
+    def _run_single_experiment(self, hyp: dict[str, Any]):
         exp_id = hyp["id"]
         name = hyp["name"]
         print(f"\nEvaluating Hypothesis: [{exp_id}] - {name}")
@@ -130,21 +132,21 @@ class ArcResearchLoop:
 
             # Trigger Cryptographic Iron Rule Gate: build & request approval
             print("\nTriggering Cryptographic Iron Rule Submission Gate...")
-            prov = self.auth_gate.build_submission()
+            self.auth_gate.build_submission()
             token = self.auth_gate.request_approval(
                 exp_id=exp_id,
                 notes=f"Automated promotion of {name} (LCB: {cand_lcb:.2f}%)",
             )
             print("=" * 75)
             print("AUTONOMOUS LOOP HALTED: Candidate ready for official submission.")
-            print(f"To submit to Kaggle, run:\npython cli.py submit --approval \"{token}\"")
+            print(f'To submit to Kaggle, run:\npython cli.py submit --approval "{token}"')
             print("=" * 75)
 
         self._save_registry()
 
     def _evaluate_agent_on_suite(
-        self, hyp: Dict[str, Any]
-    ) -> Tuple[List[EnvironmentEvaluation], float, int, List[float]]:
+        self, hyp: dict[str, Any]
+    ) -> tuple[list[EnvironmentEvaluation], float, int, list[float]]:
         """Runs agent across synthetic micro-world suite and records metrics."""
         evals = []
         latencies_ms = []
@@ -206,14 +208,19 @@ class ArcResearchLoop:
         return evals, model_fidelity, illegal_count, latencies_ms
 
     def _run_single_test_env(
-        self, env_fn: Any, game_id: str, baseline_actions: int, max_steps: int, parameters: Optional[Dict[str, Any]] = None
-    ) -> Tuple[EnvironmentEvaluation, List[float], int]:
+        self,
+        env_fn: Any,
+        game_id: str,
+        baseline_actions: int,
+        max_steps: int,
+        parameters: dict[str, Any] | None = None,
+    ) -> tuple[EnvironmentEvaluation, list[float], int]:
         env = env_fn()
         agent = MyAgent(game_id=game_id, parameters=parameters)
         latencies = []
         illegal_count = 0
 
-        for step in range(1, max_steps + 1):
+        for _step in range(1, max_steps + 1):
             if agent.is_done(env.frame, env):
                 break
 
@@ -240,7 +247,7 @@ class ArcResearchLoop:
             if getattr(env, "state", None) == GameState.WIN:
                 break
 
-        completed = (getattr(env, "state", None) == GameState.WIN)
+        completed = getattr(env, "state", None) == GameState.WIN
         actions_taken = getattr(env, "step_count", max_steps)
 
         evaluation = EnvironmentEvaluation(

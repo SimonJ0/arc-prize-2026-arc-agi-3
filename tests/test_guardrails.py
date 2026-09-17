@@ -3,7 +3,7 @@ Unit tests for AnomalyGuardrail.
 """
 
 import numpy as np
-import pytest
+
 from src.core.guardrails import AnomalyGuardrail
 
 
@@ -26,19 +26,23 @@ def test_entropy_and_extremes():
     guard = AnomalyGuardrail(min_probability_bound=1e-5, max_probability_bound=0.999)
 
     # Well-behaved probabilities
-    good_preds = np.array([
-        [0.45, 0.35, 0.20],
-        [0.30, 0.50, 0.20],
-        [0.33, 0.33, 0.34],
-    ])
+    good_preds = np.array(
+        [
+            [0.45, 0.35, 0.20],
+            [0.30, 0.50, 0.20],
+            [0.33, 0.33, 0.34],
+        ]
+    )
     res_good = guard.check_entropy_and_extremes(good_preds)
     assert res_good.passed is True
 
     # Dangerous extreme probabilities
-    extreme_preds = np.array([
-        [0.99999, 0.000005, 0.000005],
-        [0.40, 0.40, 0.20],
-    ])
+    extreme_preds = np.array(
+        [
+            [0.99999, 0.000005, 0.000005],
+            [0.40, 0.40, 0.20],
+        ]
+    )
     res_extreme = guard.check_entropy_and_extremes(extreme_preds)
     assert res_extreme.passed is False
     assert "extreme probabilities" in res_extreme.message.lower()

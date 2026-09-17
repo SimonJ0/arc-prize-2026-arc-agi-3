@@ -5,9 +5,10 @@ feature importances, and diagnostic metrics to dynamically synthesize and priori
 the next research hypotheses.
 """
 
-from typing import Dict, List, Any, Optional
-from pathlib import Path
 import json
+from pathlib import Path
+from typing import Any
+
 import yaml
 
 
@@ -25,19 +26,19 @@ class AdaptiveHypothesisGenerator:
         self.registry_path = Path(registry_path)
         self.hypotheses_path = Path(hypotheses_path)
 
-    def load_registry(self) -> Dict[str, Any]:
+    def load_registry(self) -> dict[str, Any]:
         if self.registry_path.exists():
-            with open(self.registry_path, "r", encoding="utf-8") as f:
+            with open(self.registry_path, encoding="utf-8") as f:
                 return json.load(f)
         return {"experiments": [], "current_best": None}
 
-    def load_hypotheses(self) -> Dict[str, Any]:
+    def load_hypotheses(self) -> dict[str, Any]:
         if self.hypotheses_path.exists():
-            with open(self.hypotheses_path, "r", encoding="utf-8") as f:
+            with open(self.hypotheses_path, encoding="utf-8") as f:
                 return yaml.safe_load(f) or {"hypotheses": []}
         return {"hypotheses": []}
 
-    def propose_next_hypothesis(self) -> Dict[str, Any]:
+    def propose_next_hypothesis(self) -> dict[str, Any]:
         """
         Synthesizes the next most promising hypothesis based on current experimental findings.
         """
@@ -47,7 +48,7 @@ class AdaptiveHypothesisGenerator:
         existing_ids = {h["id"] for h in existing_hyps}
 
         # Track which model types have been tried
-        tested_types = {e.get("model_type") for e in experiments}
+        {e.get("model_type") for e in experiments}
         best_loss = reg.get("current_best", 9.99)
 
         # 1. If dense LSA semantic embeddings haven't been tried yet:
@@ -94,7 +95,7 @@ class AdaptiveHypothesisGenerator:
             "rationale": f"Current best log loss is {best_loss:.5f}. Blending diverse structural and semantic representations minimizes variance.",
         }
 
-    def register_proposed_hypothesis(self, hypothesis: Optional[Dict[str, Any]] = None) -> bool:
+    def register_proposed_hypothesis(self, hypothesis: dict[str, Any] | None = None) -> bool:
         """
         Appends the proposed hypothesis to configs/hypotheses.yaml if not already present.
         Returns True if registered, False if already exists.

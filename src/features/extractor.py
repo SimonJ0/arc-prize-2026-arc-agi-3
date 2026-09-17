@@ -6,7 +6,8 @@ multi-turn dialogue dynamics, and tie interaction signals with built-in symmetri
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -20,7 +21,7 @@ DISCLAIMER_PATTERN = re.compile(
 )
 
 
-def safe_parse_dialogue(val: Any) -> List[str]:
+def safe_parse_dialogue(val: Any) -> list[str]:
     """
     Safely decodes JSON dialogue arrays, handling malformed strings and escapes.
     Returns a list of conversation turns.
@@ -45,7 +46,7 @@ def safe_parse_dialogue(val: Any) -> List[str]:
     return [val_clean.replace("\\n", "\n").replace('\\"', '"')]
 
 
-def compute_turn_metrics(turns: List[str]) -> Dict[str, Any]:
+def compute_turn_metrics(turns: list[str]) -> dict[str, Any]:
     """Extracts structural and length statistics across dialogue turns."""
     n_turns = max(1, len(turns))
     full_text = "\n\n".join(turns)
@@ -73,9 +74,9 @@ class FeatureExtractor:
     """
 
     def __init__(self):
-        self.feature_names: List[str] = []
+        self.feature_names: list[str] = []
 
-    def extract_row(self, prompt: Any, resp_a: Any, resp_b: Any) -> Dict[str, float]:
+    def extract_row(self, prompt: Any, resp_a: Any, resp_b: Any) -> dict[str, float]:
         """Extracts features for a single sample."""
         feats = {}
 
@@ -129,7 +130,9 @@ class FeatureExtractor:
         feats["last_word_len_b"] = float(last_word_b)
         feats["last_char_diff"] = float(last_char_a - last_char_b)
         feats["last_word_diff"] = float(last_word_a - last_word_b)
-        feats["last_char_ratio"] = float((last_char_a - last_char_b) / (last_char_a + last_char_b + 1.0))
+        feats["last_char_ratio"] = float(
+            (last_char_a - last_char_b) / (last_char_a + last_char_b + 1.0)
+        )
 
         feats["turn_growth_a"] = float(a_stats["turn_char_growth"])
         feats["turn_growth_b"] = float(b_stats["turn_char_growth"])
@@ -207,7 +210,9 @@ class FeatureExtractor:
 
         # 4. Tie-Detector Interaction Features (Symmetric)
         if len(set_a.union(set_b)) > 0:
-            feats["resp_ab_jaccard"] = float(len(set_a.intersection(set_b)) / len(set_a.union(set_b)))
+            feats["resp_ab_jaccard"] = float(
+                len(set_a.intersection(set_b)) / len(set_a.union(set_b))
+            )
         else:
             feats["resp_ab_jaccard"] = 1.0
 
@@ -236,7 +241,9 @@ class FeatureExtractor:
     def extract_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """Extracts feature DataFrame for all rows in df."""
         records = []
-        for prompt, resp_a, resp_b in zip(df["prompt"], df["response_a"], df["response_b"]):
+        for prompt, resp_a, resp_b in zip(
+            df["prompt"], df["response_a"], df["response_b"], strict=False
+        ):
             records.append(self.extract_row(prompt, resp_a, resp_b))
 
         feature_df = pd.DataFrame(records)
@@ -249,8 +256,9 @@ class FeatureExtractor:
         Used for Position Symmetry evaluation and Test-Time Augmentation (TTA).
         """
         records = []
-        for prompt, resp_a, resp_b in zip(df["prompt"], df["response_a"], df["response_b"]):
+        for prompt, resp_a, resp_b in zip(
+            df["prompt"], df["response_a"], df["response_b"], strict=False
+        ):
             records.append(self.extract_row(prompt, resp_b, resp_a))
 
         return pd.DataFrame(records)
-

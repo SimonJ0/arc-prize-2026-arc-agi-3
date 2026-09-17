@@ -3,7 +3,7 @@ Unit tests for post-hoc temperature calibration.
 """
 
 import numpy as np
-import pytest
+
 from src.core.calibration import TemperatureCalibrator, optimize_temperature
 from src.core.metrics import compute_log_loss
 
@@ -44,15 +44,19 @@ def test_temperature_calibration_overconfidence():
 
 def test_temperature_calibration_perfect():
     """If already well-calibrated, temperature should remain near 1.0."""
-    y_true = np.array([
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ])
-    probs = np.array([
-        [0.9, 0.05, 0.05],
-        [0.05, 0.9, 0.05],
-        [0.05, 0.05, 0.9],
-    ])
+    y_true = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+    )
+    probs = np.array(
+        [
+            [0.9, 0.05, 0.05],
+            [0.05, 0.9, 0.05],
+            [0.05, 0.05, 0.9],
+        ]
+    )
     T = optimize_temperature(y_true, probs)
     assert 0.1 <= T <= 5.0

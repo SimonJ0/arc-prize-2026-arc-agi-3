@@ -3,7 +3,6 @@ Optimal Convex Ensemble Blending Engine.
 Optimizes multi-class Log Loss directly over model probabilities using SLSQP / Dirichlet weighting.
 """
 
-from typing import Dict, List, Optional, Tuple
 import numpy as np
 from scipy.optimize import minimize
 
@@ -16,15 +15,15 @@ class EnsembleBlender:
     to minimize Kaggle multi-class log loss.
     """
 
-    def __init__(self, names: Optional[List[str]] = None):
+    def __init__(self, names: list[str] | None = None):
         self.names = names or []
-        self.weights: Optional[np.ndarray] = None
-        self.optimal_log_loss: Optional[float] = None
+        self.weights: np.ndarray | None = None
+        self.optimal_log_loss: float | None = None
 
-    def fit(self, oofs: List[np.ndarray], y_true: np.ndarray) -> "EnsembleBlender":
+    def fit(self, oofs: list[np.ndarray], y_true: np.ndarray) -> "EnsembleBlender":
         """
         Fits optimal convex blending weights across M model OOF predictions.
-        
+
         Args:
             oofs: List of M arrays, each of shape (N, 3).
             y_true: True one-hot or target array of shape (N, 3).
@@ -67,14 +66,14 @@ class EnsembleBlender:
 
     def fit_with_nested_cv(
         self,
-        oofs: List[np.ndarray],
+        oofs: list[np.ndarray],
         y_true: np.ndarray,
         n_blend_folds: int = 3,
     ) -> "EnsembleBlender":
         """
         Fits optimal convex blending weights using nested cross-validation
         to prevent in-sample overfitting of weights on OOF predictions.
-        
+
         Args:
             oofs: List of M arrays of shape (N, 3).
             y_true: True targets array (N, 3).
@@ -85,14 +84,16 @@ class EnsembleBlender:
             return self.fit(oofs, y_true)
 
         from sklearn.model_selection import KFold
+
         kf = KFold(n_splits=n_blend_folds, shuffle=True, random_state=42)
-        fold_weights = []
+        fold_weights: list[np.ndarray] = []
 
         for train_idx, _ in kf.split(y_true):
             inner_oofs = [oof[train_idx] for oof in oofs]
             inner_blender = EnsembleBlender(names=self.names)
             inner_blender.fit(inner_oofs, y_true[train_idx])
-            fold_weights.append(inner_blender.weights)
+            if inner_blender.weights is not None:
+                fold_weights.append(inner_blender.weights)
 
         # Average weights across inner blend folds to regularize
         avg_weights = np.mean(fold_weights, axis=0)
@@ -103,7 +104,7 @@ class EnsembleBlender:
         self.optimal_log_loss = compute_log_loss(y_true, blended_full)
         return self
 
-    def blend(self, pred_list: List[np.ndarray]) -> np.ndarray:
+    def blend(self, pred_list: list[np.ndarray]) -> np.ndarray:
         """Blends test predictions using fitted weights."""
         if self.weights is None:
             raise ValueError("Blender must be fitted before blending.")
@@ -112,7 +113,7 @@ class EnsembleBlender:
         blended = np.tensordot(self.weights, stacked, axes=(0, 0))
         return normalize_probabilities(blended)
 
-    def get_weight_summary(self) -> Dict[str, float]:
+    def get_weight_summary(self) -> dict[str, float]:
         """Returns readable dictionary of model names and their assigned ensemble weights."""
         if self.weights is None:
             return {}

@@ -2,32 +2,29 @@
 Unit tests for DRE-Bench Cognitive Hierarchy and OpenAI Reasoning Persistence & Context Compaction.
 """
 
-from collections import deque
 import numpy as np
-import pytest
 
-from src.arc_agent.perception.cognitive_hierarchy import (
-    CognitiveHierarchyPerception,
-    CognitiveHierarchyAnalysis,
-)
 from src.arc_agent.memory.reasoning_state import (
-    PersistentReasoningState,
     ContextCompactor,
+    PersistentReasoningState,
     StepSummary,
 )
-from src.arc_agent.planning.epistemic_policy import EpistemicPolicy
-from src.arc_core.contracts import Observation
+from src.arc_agent.perception.cognitive_hierarchy import (
+    CognitiveHierarchyPerception,
+)
 from src.arc_agent.perception.layered_perception import LayeredPerception
+from src.arc_agent.planning.epistemic_policy import EpistemicPolicy
 from src.arc_agent.world_model.belief_state import BeliefStateWorldModel
+from src.arc_core.contracts import Observation
 
 
 def test_dre_bench_attribute_and_spatial_levels():
     """Verify Level 1 Attribute and Level 2 Spatial analysis."""
     # Create 16x16 grid with background=0, horizontal wall=1, player=2, goal=3
     grid = np.zeros((16, 16), dtype=int)
-    grid[5, 2:14] = 1   # Wall (size 12)
-    grid[2, 2] = 2      # Player singleton (size 1)
-    grid[10, 10] = 3    # Goal singleton (size 1)
+    grid[5, 2:14] = 1  # Wall (size 12)
+    grid[2, 2] = 2  # Player singleton (size 1)
+    grid[10, 10] = 3  # Goal singleton (size 1)
 
     perception = CognitiveHierarchyPerception()
     analysis = perception.analyze(grid)
@@ -245,7 +242,9 @@ def test_multidirectional_astar_preserves_unlearned_actions():
         reasoning_state=reasoning_state,
     )
     assert path is not None, "A* failed to find 2D path when only 1 action was empirically known!"
-    assert "ACTION1" in path or "ACTION4" in path, "A* only used learned action, collapsing search to 1D!"
+    assert "ACTION1" in path or "ACTION4" in path, (
+        "A* only used learned action, collapsing search to 1D!"
+    )
 
 
 def test_walkable_surface_not_marked_as_static_obstacle():
@@ -280,5 +279,3 @@ def test_dynamic_avatar_detection_from_multi_pixel_motion_diff():
     # Centroid of (12:15, 10:13) is (13, 11)
     assert abs(analysis.player_pos[0] - 13) <= 1
     assert abs(analysis.player_pos[1] - 11) <= 1
-
-

@@ -10,7 +10,7 @@ Decomposes perception and causal reasoning across four cognitive tiers:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+
 import numpy as np
 from scipy.ndimage import label
 
@@ -18,11 +18,12 @@ from scipy.ndimage import label
 @dataclass(frozen=True)
 class AttributeProfile:
     """Level 1 Attribute abstraction of an entity."""
+
     entity_id: int
     color: int
     size: int
-    bbox: Tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
-    centroid: Tuple[float, float]
+    bbox: tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
+    centroid: tuple[float, float]
     aspect_ratio: float
     solidity: float  # size / (bbox_height * bbox_width)
     is_singleton: bool  # size == 1
@@ -31,6 +32,7 @@ class AttributeProfile:
 @dataclass(frozen=True)
 class SpatialSymmetry:
     """Level 2 Spatial symmetry detection."""
+
     horizontal: float
     vertical: float
     diagonal: float
@@ -39,24 +41,25 @@ class SpatialSymmetry:
 @dataclass
 class CognitiveHierarchyAnalysis:
     """Unified 4-level cognitive evaluation of an observation."""
+
     # Level 1: Attribute
-    attributes: List[AttributeProfile]
-    color_counts: Dict[int, int]
-    singleton_entities: List[AttributeProfile]
+    attributes: list[AttributeProfile]
+    color_counts: dict[int, int]
+    singleton_entities: list[AttributeProfile]
     dominant_color: int
 
     # Level 2: Spatial
     symmetry: SpatialSymmetry
-    player_pos: Optional[Tuple[int, int]] = None
-    player_color: Optional[int] = None
+    player_pos: tuple[int, int] | None = None
+    player_color: int | None = None
 
     # Level 3: Sequential Targets
-    candidate_goals: List[Tuple[int, int]] = field(default_factory=list)
+    candidate_goals: list[tuple[int, int]] = field(default_factory=list)
 
     # Level 4: Intuitive Physics
     gravity_detected: bool = False
-    gravity_vector: Tuple[int, int] = (0, 0)
-    static_obstacles: Set[Tuple[int, int]] = field(default_factory=set)
+    gravity_vector: tuple[int, int] = (0, 0)
+    static_obstacles: set[tuple[int, int]] = field(default_factory=set)
     is_stagnant: bool = False
 
 
@@ -64,27 +67,27 @@ class CognitiveHierarchyPerception:
     """Analyzes ARC-AGI-3 frames using DRE-Bench's four cognitive levels."""
 
     def __init__(self):
-        self.prev_frame: Optional[np.ndarray] = None
-        self.prev_player_pos: Optional[Tuple[int, int]] = None
+        self.prev_frame: np.ndarray | None = None
+        self.prev_player_pos: tuple[int, int] | None = None
         self.stagnant_steps: int = 0
 
     def analyze(
         self,
         frame: np.ndarray,
-        prev_frame: Optional[np.ndarray] = None,
-        known_player_color: Optional[int] = None,
+        prev_frame: np.ndarray | None = None,
+        known_player_color: int | None = None,
     ) -> CognitiveHierarchyAnalysis:
         """Executes full 4-level cognitive breakdown of the grid."""
         H, W = frame.shape
 
         # --- LEVEL 1: ATTRIBUTE ANALYSIS ---
         unique_colors, counts = np.unique(frame, return_counts=True)
-        color_counts = {int(c): int(cnt) for c, cnt in zip(unique_colors, counts)}
+        color_counts = {int(c): int(cnt) for c, cnt in zip(unique_colors, counts, strict=False)}
         # Background is typically the color with maximum area
         dominant_color = int(unique_colors[np.argmax(counts)])
 
-        attributes: List[AttributeProfile] = []
-        singleton_entities: List[AttributeProfile] = []
+        attributes: list[AttributeProfile] = []
+        singleton_entities: list[AttributeProfile] = []
         entity_id_seq = 0
 
         for color in unique_colors:
@@ -92,7 +95,7 @@ class CognitiveHierarchyPerception:
             if color == dominant_color:
                 continue
 
-            color_mask = (frame == color)
+            color_mask = frame == color
             labeled_arr, num_feats = label(color_mask)
 
             for feat_idx in range(1, num_feats + 1):
@@ -137,7 +140,7 @@ class CognitiveHierarchyPerception:
 
         # 1. Prioritize dynamic motion diffs across consecutive frames
         if prev_frame is not None and prev_frame.shape == frame.shape:
-            diff = (frame != prev_frame)
+            diff = frame != prev_frame
             if np.any(diff):
                 best_entity = None
                 best_size = 999999
@@ -149,7 +152,9 @@ class CognitiveHierarchyPerception:
                     if (int(cy) <= 1 or int(cy) >= H - 2) and profile.size <= 4:
                         continue
                     min_y, min_x, max_y, max_x = profile.bbox
-                    ent_diff = diff[min_y:max_y+1, min_x:max_x+1] & (frame[min_y:max_y+1, min_x:max_x+1] == profile.color)
+                    ent_diff = diff[min_y : max_y + 1, min_x : max_x + 1] & (
+                        frame[min_y : max_y + 1, min_x : max_x + 1] == profile.color
+                    )
                     if np.any(ent_diff):
                         if profile.size < best_size:
                             best_entity = profile
@@ -170,21 +175,27 @@ class CognitiveHierarchyPerception:
             player_pos = (int(target.centroid[0]), int(target.centroid[1]))
             player_color = target.color
         elif player_pos is None and attributes:
-            sorted_candidates = sorted([a for a in attributes if a.color != dominant_color], key=lambda a: a.size)
+            sorted_candidates = sorted(
+                [a for a in attributes if a.color != dominant_color], key=lambda a: a.size
+            )
             if sorted_candidates:
                 target = sorted_candidates[0]
                 player_pos = (int(target.centroid[0]), int(target.centroid[1]))
                 player_color = target.color
 
         # Track position stagnation (failsafe against false static avatar locks)
-        if self.prev_player_pos is not None and player_pos is not None and player_pos == self.prev_player_pos:
+        if (
+            self.prev_player_pos is not None
+            and player_pos is not None
+            and player_pos == self.prev_player_pos
+        ):
             self.stagnant_steps += 1
         else:
             self.stagnant_steps = 0
-        is_stagnant = (self.stagnant_steps >= 4)
+        is_stagnant = self.stagnant_steps >= 4
 
         # --- LEVEL 3: CANDIDATE GOALS (Sequential targets) ---
-        candidate_goals: List[Tuple[int, int]] = []
+        candidate_goals: list[tuple[int, int]] = []
         for profile in attributes:
             if player_color is not None and profile.color == player_color:
                 continue
@@ -199,8 +210,10 @@ class CognitiveHierarchyPerception:
             )
 
         # --- LEVEL 4: INTUITIVE PHYSICS (Obstacles & Gravity) ---
-        static_obstacles: Set[Tuple[int, int]] = set()
-        player_standing_color = frame[player_pos[0], player_pos[1]] if player_pos is not None else None
+        static_obstacles: set[tuple[int, int]] = set()
+        player_standing_color = (
+            frame[player_pos[0], player_pos[1]] if player_pos is not None else None
+        )
 
         for profile in attributes:
             # Walkable surface/floor the player stands on is NEVER an obstacle
@@ -213,7 +226,7 @@ class CognitiveHierarchyPerception:
                 continue
 
             min_y, min_x, max_y, max_x = profile.bbox
-            touches_border = (min_y == 0 or max_y == H - 1 or min_x == 0 or max_x == W - 1)
+            touches_border = min_y == 0 or max_y == H - 1 or min_x == 0 or max_x == W - 1
 
             # Only entities touching the border with high solidity are treated as static boundary walls
             if touches_border and profile.solidity >= 0.7:

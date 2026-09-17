@@ -4,13 +4,14 @@ Models Chatbot Arena preference strictly using empirical class frequencies
 and logistic length-differential scaling.
 """
 
-from typing import Any, Optional
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from scipy.special import expit
 
-from src.models.base import BasePreferencePredictor
 from src.core.metrics import normalize_probabilities
+from src.models.base import BasePreferencePredictor
 
 
 class LengthPriorPredictor(BasePreferencePredictor):
@@ -30,7 +31,7 @@ class LengthPriorPredictor(BasePreferencePredictor):
 
     def fit(self, X: Any, y: np.ndarray, **kwargs) -> "LengthPriorPredictor":
         """Computes empirical priors from target distribution."""
-        n_samples = len(y)
+        len(y)
         self.p_a_prior = float(np.mean(y == 0))
         self.p_b_prior = float(np.mean(y == 1))
         self.p_tie_prior = float(np.mean(y == 2))

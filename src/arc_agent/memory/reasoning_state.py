@@ -10,18 +10,20 @@ Implements the two breakthrough architectural settings that tripled ARC-AGI-3 be
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 
 @dataclass(frozen=True)
 class StepSummary:
     """Compact semantic representation of an environment step."""
+
     step: int
     level: int
     action: str
-    player_pos: Optional[Tuple[int, int]]
-    delta_pos: Tuple[int, int]  # (dy, dx)
+    player_pos: tuple[int, int] | None
+    delta_pos: tuple[int, int]  # (dy, dx)
     state: str
     levels_completed: int
 
@@ -32,38 +34,39 @@ class PersistentReasoningState:
     In-memory working scratchpad preserving reasoning state across environment turns.
     Prevents restarting hypothesis generation and planning from scratch on every step.
     """
+
     game_id: str
     # 1. Macro-Planning: Active queue of planned atomic actions in flight
     active_macro_plan: deque[str] = field(default_factory=deque)
-    active_goal_coord: Optional[Tuple[int, int]] = None
+    active_goal_coord: tuple[int, int] | None = None
 
     # 2. Semantic Entity Roles: e.g. {player_color: 'PLAYER', goal_color: 'GOAL'}
-    entity_roles: Dict[int, str] = field(default_factory=dict)
-    player_color: Optional[int] = None
-    goal_color: Optional[int] = None
+    entity_roles: dict[int, str] = field(default_factory=dict)
+    player_color: int | None = None
+    goal_color: int | None = None
 
     # 3. Lethal Hazard Avoidance (Learned from GAME_OVER)
-    death_coords: Set[Tuple[int, int]] = field(default_factory=set)
-    hazard_colors: Set[int] = field(default_factory=set)
+    death_coords: set[tuple[int, int]] = field(default_factory=set)
+    hazard_colors: set[int] = field(default_factory=set)
 
     # 4. Verified Causal Action Mappings: action_name -> (dy, dx)
-    action_effects: Dict[str, Tuple[int, int]] = field(default_factory=dict)
-    ineffective_actions: Set[Tuple[str, int]] = field(default_factory=set)  # (action, level)
+    action_effects: dict[str, tuple[int, int]] = field(default_factory=dict)
+    ineffective_actions: set[tuple[str, int]] = field(default_factory=set)  # (action, level)
 
     # 5. Spatial Visitation & Deadlock Tracking
-    visited_positions: Set[Tuple[int, int]] = field(default_factory=set)
-    visitation_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
+    visited_positions: set[tuple[int, int]] = field(default_factory=set)
+    visitation_counts: dict[tuple[int, int], int] = field(default_factory=dict)
 
     # 6. Surprise Detection & Falsification
-    last_predicted_pos: Optional[Tuple[int, int]] = None
-    falsified_goals: Set[Tuple[int, int]] = field(default_factory=set)
+    last_predicted_pos: tuple[int, int] | None = None
+    falsified_goals: set[tuple[int, int]] = field(default_factory=set)
     current_level: int = 1
 
     def has_active_plan(self) -> bool:
         """Returns True if there is a pending macro-action sequence."""
         return len(self.active_macro_plan) > 0
 
-    def next_planned_action(self, available_actions: Set[str]) -> Optional[str]:
+    def next_planned_action(self, available_actions: Collection[str]) -> str | None:
         """Pops the next action if it is currently legal, otherwise invalidates plan."""
         if not self.active_macro_plan:
             return None
@@ -74,7 +77,7 @@ class PersistentReasoningState:
         self.clear_plan()
         return None
 
-    def set_macro_plan(self, plan: List[str], goal: Optional[Tuple[int, int]] = None):
+    def set_macro_plan(self, plan: list[str], goal: tuple[int, int] | None = None):
         """Sets a new multi-step macro-plan in flight."""
         self.active_macro_plan = deque(plan)
         self.active_goal_coord = goal
@@ -84,24 +87,24 @@ class PersistentReasoningState:
         self.active_macro_plan.clear()
         self.active_goal_coord = None
 
-    def record_visitation(self, pos: Tuple[int, int]) -> int:
+    def record_visitation(self, pos: tuple[int, int]) -> int:
         """Increments and returns visitation frequency for position in current level."""
         self.visited_positions.add(pos)
         count = self.visitation_counts.get(pos, 0) + 1
         self.visitation_counts[pos] = count
         return count
 
-    def is_loop_detected(self, pos: Tuple[int, int], threshold: int = 3) -> bool:
+    def is_loop_detected(self, pos: tuple[int, int], threshold: int = 3) -> bool:
         """Returns True if agent has visited this position repeatedly, signaling oscillation."""
         return self.visitation_counts.get(pos, 0) >= threshold
 
-    def falsify_goal(self, goal: Tuple[int, int]):
+    def falsify_goal(self, goal: tuple[int, int]):
         """Marks goal coordinate as falsified/ineffective for this level."""
         self.falsified_goals.add(goal)
         if self.active_goal_coord == goal:
             self.clear_plan()
 
-    def check_and_handle_surprise(self, actual_pos: Tuple[int, int]) -> bool:
+    def check_and_handle_surprise(self, actual_pos: tuple[int, int]) -> bool:
         """
         Compares actual position with last_predicted_pos.
         If surprise occurs while executing a macro plan, immediately invalidates plan.
@@ -115,7 +118,7 @@ class PersistentReasoningState:
         self.last_predicted_pos = None
         return surprise
 
-    def record_death(self, fatal_pos: Optional[Tuple[int, int]], fatal_color: Optional[int]):
+    def record_death(self, fatal_pos: tuple[int, int] | None, fatal_color: int | None):
         """Commits lethal position and entity color to permanent negative memory."""
         if fatal_pos is not None:
             self.death_coords.add(fatal_pos)
@@ -143,7 +146,6 @@ class PersistentReasoningState:
         self.last_predicted_pos = None
 
 
-
 class ContextCompactor:
     """
     Compresses raw 2D grid observations into dense semantic trajectory summaries.
@@ -154,15 +156,15 @@ class ContextCompactor:
         self.max_rolling_steps = max_rolling_steps
         self.rolling_history: deque[StepSummary] = deque(maxlen=max_rolling_steps)
         self.total_steps_recorded = 0
-        self.level_step_counts: Dict[int, int] = {}
+        self.level_step_counts: dict[int, int] = {}
 
     def compact_step(
         self,
         step: int,
         level: int,
         action: str,
-        curr_pos: Optional[Tuple[int, int]],
-        prev_pos: Optional[Tuple[int, int]],
+        curr_pos: tuple[int, int] | None,
+        prev_pos: tuple[int, int] | None,
         state: str,
         levels_completed: int,
     ) -> StepSummary:
@@ -187,7 +189,7 @@ class ContextCompactor:
         self.level_step_counts[level] = self.level_step_counts.get(level, 0) + 1
         return summary
 
-    def get_trajectory_summary(self) -> Dict[str, Any]:
+    def get_trajectory_summary(self) -> dict[str, Any]:
         """Returns compact state dictionary for logging or planning."""
         recent = [
             {

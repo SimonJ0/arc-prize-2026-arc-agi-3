@@ -2,6 +2,7 @@
 AUTONOMOUS ARC-AGI-3 UNCERTAINTY-AWARE AGENT (INLINED DEPLOYMENT BUNDLE)
 Self-contained, offline-compatible implementation for Kaggle code competition.
 """
+
 from __future__ import annotations
 import os
 import sys
@@ -19,6 +20,7 @@ from arcengine import GameAction, GameState, FrameDataRaw
 try:
     from agents.agent import Agent
 except ImportError:
+
     class Agent:
         def __init__(self, game_id: str = "default_game", *args: Any, **kwargs: Any):
             self.game_id = game_id
@@ -35,28 +37,31 @@ action proposals, decision traces, and transition events.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
+
 import numpy as np
 
 
 @dataclass(frozen=True)
 class Observation:
     """Immutable snapshot of the environment state returned by ARC-AGI-3."""
-    frames: Tuple[np.ndarray, ...]  # (H, W) arrays with values in [0, 15]
-    state: str                      # 'NOT_PLAYED', 'NOT_FINISHED', 'WIN', 'GAME_OVER'
+
+    frames: tuple[np.ndarray, ...]  # (H, W) arrays with values in [0, 15]
+    state: str  # 'NOT_PLAYED', 'NOT_FINISHED', 'WIN', 'GAME_OVER'
     available_actions: frozenset[str]  # e.g. {'RESET', 'ACTION1', 'ACTION2', ...}
-    game_key: str                   # Environment / game ID
-    level: int                      # Current level index (1-based)
-    action_count: int               # Actions taken so far in this level/game
-    guid: Optional[str] = None      # Session GUID
+    game_key: str  # Environment / game ID
+    level: int  # Current level index (1-based)
+    action_count: int  # Actions taken so far in this level/game
+    guid: str | None = None  # Session GUID
 
 
 @dataclass(frozen=True)
 class Transition:
     """Observed transition between two consecutive environment states."""
+
     from_observation_hash: str
     action: str
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     to_state: str
     to_observation_hash: str
     frame_diff_count: int
@@ -65,9 +70,10 @@ class Transition:
 @dataclass
 class TransitionModelHypothesis:
     """Single hypothesis about environment mechanics / transition rules."""
+
     hypothesis_id: str
     description: str
-    action_semantics: Dict[str, str] = field(default_factory=dict)  # e.g. {'ACTION1': 'MOVE_UP'}
+    action_semantics: dict[str, str] = field(default_factory=dict)  # e.g. {'ACTION1': 'MOVE_UP'}
     confidence: float = 0.5
     falsified: bool = False
     evidence_count: int = 0
@@ -82,13 +88,14 @@ class TransitionModelHypothesis:
 @dataclass
 class WorldModelBelief:
     """Factored belief state representing a posterior distribution over transition hypotheses."""
-    hypotheses: List[TransitionModelHypothesis] = field(default_factory=list)
+
+    hypotheses: list[TransitionModelHypothesis] = field(default_factory=list)
     posterior: np.ndarray = field(default_factory=lambda: np.array([]))
     one_step_accuracy: float = 0.0
     rollout_accuracy: float = 0.0
-    evidence: List[Transition] = field(default_factory=list)
+    evidence: list[Transition] = field(default_factory=list)
 
-    def get_most_likely_hypothesis(self) -> Optional[TransitionModelHypothesis]:
+    def get_most_likely_hypothesis(self) -> TransitionModelHypothesis | None:
         active = [h for h in self.hypotheses if not h.falsified]
         if not active:
             return None
@@ -98,6 +105,7 @@ class WorldModelBelief:
 @dataclass(frozen=True)
 class GoalHypothesis:
     """Hypothesis about the winning terminal condition of a level."""
+
     goal_id: str
     predicate_type: str  # e.g. 'TARGET_REACHED', 'COLOR_CLEARED', 'PATTERN_MATCH'
     confidence: float = 0.5
@@ -107,8 +115,9 @@ class GoalHypothesis:
 @dataclass(frozen=True)
 class ActionProposal:
     """Candidate action evaluated under current world-model beliefs."""
+
     action: str
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
     expected_completion_value: float = 0.0
     expected_information_gain: float = 0.0
     risk_game_over: float = 0.0
@@ -117,21 +126,27 @@ class ActionProposal:
     @property
     def score(self) -> float:
         """Heuristic value combining completion utility and epistemic gain penalized by risk."""
-        return self.expected_completion_value + 0.4 * self.expected_information_gain - 2.0 * self.risk_game_over
+        return (
+            self.expected_completion_value
+            + 0.4 * self.expected_information_gain
+            - 2.0 * self.risk_game_over
+        )
 
 
 @dataclass(frozen=True)
 class DecisionTrace:
     """Trace of agent reasoning for a single physical step."""
+
     level: int
     step: int
     observation_hash: str
-    legal_actions: Tuple[str, ...]
+    legal_actions: tuple[str, ...]
     selected_action: str
-    selected_payload: Dict[str, Any]
+    selected_payload: dict[str, Any]
     planning_mode: str  # 'EPISTEMIC_PROBE', 'GOAL_PLAN', 'LEGAL_FALLBACK', 'RESET_RECOVERY'
-    predicted_next_state: Optional[str]
+    predicted_next_state: str | None
     confidence: float
+
 
 # ======================================================================
 # INLINED: legality_adapter.py
@@ -146,7 +161,9 @@ Ensures zero 400 Bad Request errors by strictly enforcing:
 4. Non-ACTION6 actions strip all coordinates.
 """
 
-from typing import Any, Dict, Optional, Set, Tuple
+from collections.abc import Collection
+from typing import Any
+
 from arcengine import GameAction, GameState
 
 
@@ -168,14 +185,14 @@ class LegalityAdapter:
     def validate_action(
         cls,
         state: str,
-        available_actions: Set[str],
+        available_actions: Collection[str],
         proposed_action: str,
-        proposed_payload: Optional[Dict[str, Any]] = None,
+        proposed_payload: dict[str, Any] | None = None,
         default_fallback: str = "RESET",
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         """
         Validates and sanitizes proposed action against current environment state.
-        
+
         Returns:
             Tuple of (sanitized_action_str, sanitized_payload_dict)
         """
@@ -252,7 +269,7 @@ Avoids fragile single-background assumptions. Computes:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+
 import numpy as np
 from scipy.ndimage import label
 
@@ -260,11 +277,12 @@ from scipy.ndimage import label
 @dataclass(frozen=True)
 class EntityCandidate:
     """An identified object or cluster within the grid."""
+
     entity_id: int
     color: int
-    cells: Tuple[Tuple[int, int], ...]
-    bbox: Tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
-    centroid: Tuple[float, float]
+    cells: tuple[tuple[int, int], ...]
+    bbox: tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
+    centroid: tuple[float, float]
     is_dynamic: bool = False
 
     @property
@@ -275,21 +293,22 @@ class EntityCandidate:
 @dataclass
 class FrameAnalysis:
     """Multi-hypothesis perception result for a single observation."""
-    frame_shape: Tuple[int, int]
-    present_colors: Set[int]
-    background_hypotheses: List[Tuple[int, float]]  # (color, confidence)
-    entities: List[EntityCandidate]
-    dynamic_diff_mask: Optional[np.ndarray] = None
-    symmetry_scores: Dict[str, float] = field(default_factory=dict)
+
+    frame_shape: tuple[int, int]
+    present_colors: set[int]
+    background_hypotheses: list[tuple[int, float]]  # (color, confidence)
+    entities: list[EntityCandidate]
+    dynamic_diff_mask: np.ndarray | None = None
+    symmetry_scores: dict[str, float] = field(default_factory=dict)
 
 
 class LayeredPerception:
     """Perception pipeline maintaining multiple structural segmentations."""
 
     def __init__(self):
-        self.previous_frame: Optional[np.ndarray] = None
+        self.previous_frame: np.ndarray | None = None
 
-    def analyze(self, frame: np.ndarray, prev_frame: Optional[np.ndarray] = None) -> FrameAnalysis:
+    def analyze(self, frame: np.ndarray, prev_frame: np.ndarray | None = None) -> FrameAnalysis:
         """
         Processes a 2D integer grid frame into layered perceptual abstractions.
         """
@@ -308,7 +327,7 @@ class LayeredPerception:
             prev_frame = self.previous_frame
         dynamic_mask = None
         if prev_frame is not None and prev_frame.shape == frame.shape:
-            dynamic_mask = (frame != prev_frame)
+            dynamic_mask = frame != prev_frame
 
         # 3. Extract entities across candidate non-background components
         primary_bg = bg_hypotheses[0][0] if bg_hypotheses else 0
@@ -333,20 +352,18 @@ class LayeredPerception:
 
     def _infer_background_candidates(
         self, frame: np.ndarray, unique_colors: np.ndarray, counts: np.ndarray
-    ) -> List[Tuple[int, float]]:
+    ) -> list[tuple[int, float]]:
         """
         Ranks candidate background colors using combined border density,
         overall area fraction, and connectivity.
         """
         H, W = frame.shape
         total_pixels = H * W
-        border_pixels = np.concatenate([
-            frame[0, :], frame[-1, :], frame[:, 0], frame[:, -1]
-        ])
-        border_total = len(border_pixels)
+        border_pixels = np.concatenate([frame[0, :], frame[-1, :], frame[:, 0], frame[:, -1]])
+        len(border_pixels)
 
         candidates = []
-        for color, count in zip(unique_colors, counts):
+        for color, count in zip(unique_colors, counts, strict=False):
             color = int(color)
             area_frac = count / total_pixels
             border_frac = np.mean(border_pixels == color)
@@ -358,8 +375,8 @@ class LayeredPerception:
         return candidates
 
     def _extract_entities(
-        self, frame: np.ndarray, background_color: int, dynamic_mask: Optional[np.ndarray]
-    ) -> List[EntityCandidate]:
+        self, frame: np.ndarray, background_color: int, dynamic_mask: np.ndarray | None
+    ) -> list[EntityCandidate]:
         """Extracts connected component entities excluding the primary candidate background."""
         entities = []
         entity_id_counter = 0
@@ -369,7 +386,7 @@ class LayeredPerception:
             if color == background_color:
                 continue
 
-            color_mask = (frame == color)
+            color_mask = frame == color
             labeled_array, num_features = label(color_mask)
 
             for feat_idx in range(1, num_features + 1):
@@ -386,17 +403,20 @@ class LayeredPerception:
                 if dynamic_mask is not None:
                     is_dyn = bool(np.any(dynamic_mask[labeled_array == feat_idx]))
 
-                entities.append(EntityCandidate(
-                    entity_id=entity_id_counter,
-                    color=color,
-                    cells=cells,
-                    bbox=(int(min_y), int(min_x), int(max_y), int(max_x)),
-                    centroid=centroid,
-                    is_dynamic=is_dyn,
-                ))
+                entities.append(
+                    EntityCandidate(
+                        entity_id=entity_id_counter,
+                        color=color,
+                        cells=cells,
+                        bbox=(int(min_y), int(min_x), int(max_y), int(max_x)),
+                        centroid=centroid,
+                        is_dynamic=is_dyn,
+                    )
+                )
                 entity_id_counter += 1
 
         return entities
+
 
 # ======================================================================
 # INLINED: cognitive_hierarchy.py
@@ -413,7 +433,7 @@ Decomposes perception and causal reasoning across four cognitive tiers:
 
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+
 import numpy as np
 from scipy.ndimage import label
 
@@ -421,11 +441,12 @@ from scipy.ndimage import label
 @dataclass(frozen=True)
 class AttributeProfile:
     """Level 1 Attribute abstraction of an entity."""
+
     entity_id: int
     color: int
     size: int
-    bbox: Tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
-    centroid: Tuple[float, float]
+    bbox: tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
+    centroid: tuple[float, float]
     aspect_ratio: float
     solidity: float  # size / (bbox_height * bbox_width)
     is_singleton: bool  # size == 1
@@ -434,6 +455,7 @@ class AttributeProfile:
 @dataclass(frozen=True)
 class SpatialSymmetry:
     """Level 2 Spatial symmetry detection."""
+
     horizontal: float
     vertical: float
     diagonal: float
@@ -442,24 +464,25 @@ class SpatialSymmetry:
 @dataclass
 class CognitiveHierarchyAnalysis:
     """Unified 4-level cognitive evaluation of an observation."""
+
     # Level 1: Attribute
-    attributes: List[AttributeProfile]
-    color_counts: Dict[int, int]
-    singleton_entities: List[AttributeProfile]
+    attributes: list[AttributeProfile]
+    color_counts: dict[int, int]
+    singleton_entities: list[AttributeProfile]
     dominant_color: int
 
     # Level 2: Spatial
     symmetry: SpatialSymmetry
-    player_pos: Optional[Tuple[int, int]] = None
-    player_color: Optional[int] = None
+    player_pos: tuple[int, int] | None = None
+    player_color: int | None = None
 
     # Level 3: Sequential Targets
-    candidate_goals: List[Tuple[int, int]] = field(default_factory=list)
+    candidate_goals: list[tuple[int, int]] = field(default_factory=list)
 
     # Level 4: Intuitive Physics
     gravity_detected: bool = False
-    gravity_vector: Tuple[int, int] = (0, 0)
-    static_obstacles: Set[Tuple[int, int]] = field(default_factory=set)
+    gravity_vector: tuple[int, int] = (0, 0)
+    static_obstacles: set[tuple[int, int]] = field(default_factory=set)
     is_stagnant: bool = False
 
 
@@ -467,27 +490,27 @@ class CognitiveHierarchyPerception:
     """Analyzes ARC-AGI-3 frames using DRE-Bench's four cognitive levels."""
 
     def __init__(self):
-        self.prev_frame: Optional[np.ndarray] = None
-        self.prev_player_pos: Optional[Tuple[int, int]] = None
+        self.prev_frame: np.ndarray | None = None
+        self.prev_player_pos: tuple[int, int] | None = None
         self.stagnant_steps: int = 0
 
     def analyze(
         self,
         frame: np.ndarray,
-        prev_frame: Optional[np.ndarray] = None,
-        known_player_color: Optional[int] = None,
+        prev_frame: np.ndarray | None = None,
+        known_player_color: int | None = None,
     ) -> CognitiveHierarchyAnalysis:
         """Executes full 4-level cognitive breakdown of the grid."""
         H, W = frame.shape
 
         # --- LEVEL 1: ATTRIBUTE ANALYSIS ---
         unique_colors, counts = np.unique(frame, return_counts=True)
-        color_counts = {int(c): int(cnt) for c, cnt in zip(unique_colors, counts)}
+        color_counts = {int(c): int(cnt) for c, cnt in zip(unique_colors, counts, strict=False)}
         # Background is typically the color with maximum area
         dominant_color = int(unique_colors[np.argmax(counts)])
 
-        attributes: List[AttributeProfile] = []
-        singleton_entities: List[AttributeProfile] = []
+        attributes: list[AttributeProfile] = []
+        singleton_entities: list[AttributeProfile] = []
         entity_id_seq = 0
 
         for color in unique_colors:
@@ -495,7 +518,7 @@ class CognitiveHierarchyPerception:
             if color == dominant_color:
                 continue
 
-            color_mask = (frame == color)
+            color_mask = frame == color
             labeled_arr, num_feats = label(color_mask)
 
             for feat_idx in range(1, num_feats + 1):
@@ -540,7 +563,7 @@ class CognitiveHierarchyPerception:
 
         # 1. Prioritize dynamic motion diffs across consecutive frames
         if prev_frame is not None and prev_frame.shape == frame.shape:
-            diff = (frame != prev_frame)
+            diff = frame != prev_frame
             if np.any(diff):
                 best_entity = None
                 best_size = 999999
@@ -552,7 +575,9 @@ class CognitiveHierarchyPerception:
                     if (int(cy) <= 1 or int(cy) >= H - 2) and profile.size <= 4:
                         continue
                     min_y, min_x, max_y, max_x = profile.bbox
-                    ent_diff = diff[min_y:max_y+1, min_x:max_x+1] & (frame[min_y:max_y+1, min_x:max_x+1] == profile.color)
+                    ent_diff = diff[min_y : max_y + 1, min_x : max_x + 1] & (
+                        frame[min_y : max_y + 1, min_x : max_x + 1] == profile.color
+                    )
                     if np.any(ent_diff):
                         if profile.size < best_size:
                             best_entity = profile
@@ -573,21 +598,27 @@ class CognitiveHierarchyPerception:
             player_pos = (int(target.centroid[0]), int(target.centroid[1]))
             player_color = target.color
         elif player_pos is None and attributes:
-            sorted_candidates = sorted([a for a in attributes if a.color != dominant_color], key=lambda a: a.size)
+            sorted_candidates = sorted(
+                [a for a in attributes if a.color != dominant_color], key=lambda a: a.size
+            )
             if sorted_candidates:
                 target = sorted_candidates[0]
                 player_pos = (int(target.centroid[0]), int(target.centroid[1]))
                 player_color = target.color
 
         # Track position stagnation (failsafe against false static avatar locks)
-        if self.prev_player_pos is not None and player_pos is not None and player_pos == self.prev_player_pos:
+        if (
+            self.prev_player_pos is not None
+            and player_pos is not None
+            and player_pos == self.prev_player_pos
+        ):
             self.stagnant_steps += 1
         else:
             self.stagnant_steps = 0
-        is_stagnant = (self.stagnant_steps >= 4)
+        is_stagnant = self.stagnant_steps >= 4
 
         # --- LEVEL 3: CANDIDATE GOALS (Sequential targets) ---
-        candidate_goals: List[Tuple[int, int]] = []
+        candidate_goals: list[tuple[int, int]] = []
         for profile in attributes:
             if player_color is not None and profile.color == player_color:
                 continue
@@ -602,8 +633,10 @@ class CognitiveHierarchyPerception:
             )
 
         # --- LEVEL 4: INTUITIVE PHYSICS (Obstacles & Gravity) ---
-        static_obstacles: Set[Tuple[int, int]] = set()
-        player_standing_color = frame[player_pos[0], player_pos[1]] if player_pos is not None else None
+        static_obstacles: set[tuple[int, int]] = set()
+        player_standing_color = (
+            frame[player_pos[0], player_pos[1]] if player_pos is not None else None
+        )
 
         for profile in attributes:
             # Walkable surface/floor the player stands on is NEVER an obstacle
@@ -616,7 +649,7 @@ class CognitiveHierarchyPerception:
                 continue
 
             min_y, min_x, max_y, max_x = profile.bbox
-            touches_border = (min_y == 0 or max_y == H - 1 or min_x == 0 or max_x == W - 1)
+            touches_border = min_y == 0 or max_y == H - 1 or min_x == 0 or max_x == W - 1
 
             # Only entities touching the border with high solidity are treated as static boundary walls
             if touches_border and profile.solidity >= 0.7:
@@ -662,6 +695,7 @@ class CognitiveHierarchyPerception:
             is_stagnant=is_stagnant,
         )
 
+
 # ======================================================================
 # INLINED: reasoning_state.py
 # ======================================================================
@@ -677,18 +711,20 @@ Implements the two breakthrough architectural settings that tripled ARC-AGI-3 be
 
 
 from collections import deque
+from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
 
 
 @dataclass(frozen=True)
 class StepSummary:
     """Compact semantic representation of an environment step."""
+
     step: int
     level: int
     action: str
-    player_pos: Optional[Tuple[int, int]]
-    delta_pos: Tuple[int, int]  # (dy, dx)
+    player_pos: tuple[int, int] | None
+    delta_pos: tuple[int, int]  # (dy, dx)
     state: str
     levels_completed: int
 
@@ -699,38 +735,39 @@ class PersistentReasoningState:
     In-memory working scratchpad preserving reasoning state across environment turns.
     Prevents restarting hypothesis generation and planning from scratch on every step.
     """
+
     game_id: str
     # 1. Macro-Planning: Active queue of planned atomic actions in flight
     active_macro_plan: deque[str] = field(default_factory=deque)
-    active_goal_coord: Optional[Tuple[int, int]] = None
+    active_goal_coord: tuple[int, int] | None = None
 
     # 2. Semantic Entity Roles: e.g. {player_color: 'PLAYER', goal_color: 'GOAL'}
-    entity_roles: Dict[int, str] = field(default_factory=dict)
-    player_color: Optional[int] = None
-    goal_color: Optional[int] = None
+    entity_roles: dict[int, str] = field(default_factory=dict)
+    player_color: int | None = None
+    goal_color: int | None = None
 
     # 3. Lethal Hazard Avoidance (Learned from GAME_OVER)
-    death_coords: Set[Tuple[int, int]] = field(default_factory=set)
-    hazard_colors: Set[int] = field(default_factory=set)
+    death_coords: set[tuple[int, int]] = field(default_factory=set)
+    hazard_colors: set[int] = field(default_factory=set)
 
     # 4. Verified Causal Action Mappings: action_name -> (dy, dx)
-    action_effects: Dict[str, Tuple[int, int]] = field(default_factory=dict)
-    ineffective_actions: Set[Tuple[str, int]] = field(default_factory=set)  # (action, level)
+    action_effects: dict[str, tuple[int, int]] = field(default_factory=dict)
+    ineffective_actions: set[tuple[str, int]] = field(default_factory=set)  # (action, level)
 
     # 5. Spatial Visitation & Deadlock Tracking
-    visited_positions: Set[Tuple[int, int]] = field(default_factory=set)
-    visitation_counts: Dict[Tuple[int, int], int] = field(default_factory=dict)
+    visited_positions: set[tuple[int, int]] = field(default_factory=set)
+    visitation_counts: dict[tuple[int, int], int] = field(default_factory=dict)
 
     # 6. Surprise Detection & Falsification
-    last_predicted_pos: Optional[Tuple[int, int]] = None
-    falsified_goals: Set[Tuple[int, int]] = field(default_factory=set)
+    last_predicted_pos: tuple[int, int] | None = None
+    falsified_goals: set[tuple[int, int]] = field(default_factory=set)
     current_level: int = 1
 
     def has_active_plan(self) -> bool:
         """Returns True if there is a pending macro-action sequence."""
         return len(self.active_macro_plan) > 0
 
-    def next_planned_action(self, available_actions: Set[str]) -> Optional[str]:
+    def next_planned_action(self, available_actions: Collection[str]) -> str | None:
         """Pops the next action if it is currently legal, otherwise invalidates plan."""
         if not self.active_macro_plan:
             return None
@@ -741,7 +778,7 @@ class PersistentReasoningState:
         self.clear_plan()
         return None
 
-    def set_macro_plan(self, plan: List[str], goal: Optional[Tuple[int, int]] = None):
+    def set_macro_plan(self, plan: list[str], goal: tuple[int, int] | None = None):
         """Sets a new multi-step macro-plan in flight."""
         self.active_macro_plan = deque(plan)
         self.active_goal_coord = goal
@@ -751,24 +788,24 @@ class PersistentReasoningState:
         self.active_macro_plan.clear()
         self.active_goal_coord = None
 
-    def record_visitation(self, pos: Tuple[int, int]) -> int:
+    def record_visitation(self, pos: tuple[int, int]) -> int:
         """Increments and returns visitation frequency for position in current level."""
         self.visited_positions.add(pos)
         count = self.visitation_counts.get(pos, 0) + 1
         self.visitation_counts[pos] = count
         return count
 
-    def is_loop_detected(self, pos: Tuple[int, int], threshold: int = 3) -> bool:
+    def is_loop_detected(self, pos: tuple[int, int], threshold: int = 3) -> bool:
         """Returns True if agent has visited this position repeatedly, signaling oscillation."""
         return self.visitation_counts.get(pos, 0) >= threshold
 
-    def falsify_goal(self, goal: Tuple[int, int]):
+    def falsify_goal(self, goal: tuple[int, int]):
         """Marks goal coordinate as falsified/ineffective for this level."""
         self.falsified_goals.add(goal)
         if self.active_goal_coord == goal:
             self.clear_plan()
 
-    def check_and_handle_surprise(self, actual_pos: Tuple[int, int]) -> bool:
+    def check_and_handle_surprise(self, actual_pos: tuple[int, int]) -> bool:
         """
         Compares actual position with last_predicted_pos.
         If surprise occurs while executing a macro plan, immediately invalidates plan.
@@ -782,7 +819,7 @@ class PersistentReasoningState:
         self.last_predicted_pos = None
         return surprise
 
-    def record_death(self, fatal_pos: Optional[Tuple[int, int]], fatal_color: Optional[int]):
+    def record_death(self, fatal_pos: tuple[int, int] | None, fatal_color: int | None):
         """Commits lethal position and entity color to permanent negative memory."""
         if fatal_pos is not None:
             self.death_coords.add(fatal_pos)
@@ -810,7 +847,6 @@ class PersistentReasoningState:
         self.last_predicted_pos = None
 
 
-
 class ContextCompactor:
     """
     Compresses raw 2D grid observations into dense semantic trajectory summaries.
@@ -821,15 +857,15 @@ class ContextCompactor:
         self.max_rolling_steps = max_rolling_steps
         self.rolling_history: deque[StepSummary] = deque(maxlen=max_rolling_steps)
         self.total_steps_recorded = 0
-        self.level_step_counts: Dict[int, int] = {}
+        self.level_step_counts: dict[int, int] = {}
 
     def compact_step(
         self,
         step: int,
         level: int,
         action: str,
-        curr_pos: Optional[Tuple[int, int]],
-        prev_pos: Optional[Tuple[int, int]],
+        curr_pos: tuple[int, int] | None,
+        prev_pos: tuple[int, int] | None,
         state: str,
         levels_completed: int,
     ) -> StepSummary:
@@ -854,7 +890,7 @@ class ContextCompactor:
         self.level_step_counts[level] = self.level_step_counts.get(level, 0) + 1
         return summary
 
-    def get_trajectory_summary(self) -> Dict[str, Any]:
+    def get_trajectory_summary(self) -> dict[str, Any]:
         """Returns compact state dictionary for logging or planning."""
         recent = [
             {
@@ -872,6 +908,7 @@ class ContextCompactor:
             "recent_trajectory": recent,
         }
 
+
 # ======================================================================
 # INLINED: belief_state.py
 # ======================================================================
@@ -883,9 +920,9 @@ Tracks 1-step prediction accuracy and explicitly falsifies hypotheses upon contr
 Only authorizes deep planning when model consensus and fidelity meet confidence thresholds.
 """
 
-from typing import Dict, List, Optional, Tuple
-import numpy as np
+from typing import Any
 
+import numpy as np
 
 
 class BeliefStateWorldModel:
@@ -909,11 +946,11 @@ class BeliefStateWorldModel:
     def __init__(self):
         self.belief = WorldModelBelief()
         self._init_hypotheses()
-        self.avatar_color: Optional[int] = None
+        self.avatar_color: int | None = None
         self.solid_colors: set[int] = set()
         # Empirical Transition Dynamics Learning
         # action -> {attempts: int, displacements: { (dy,dx): count }, blocked: int, dominant: (dy,dx), fidelity: float}
-        self.action_stats: Dict[str, Dict[str, Any]] = {}
+        self.action_stats: dict[str, dict[str, Any]] = {}
 
     def _init_hypotheses(self):
         """Initializes candidate transition dynamics hypotheses."""
@@ -946,7 +983,7 @@ class BeliefStateWorldModel:
             return True
         return False
 
-    def get_action_displacement(self, action: str) -> Optional[Tuple[int, int]]:
+    def get_action_displacement(self, action: str) -> tuple[int, int] | None:
         """Returns empirical or top-hypothesis displacement vector for action."""
         stats = self.action_stats.get(action)
         if stats and stats["dominant"] is not None and self.is_action_verified(action):
@@ -967,7 +1004,7 @@ class BeliefStateWorldModel:
         }
         return default_deltas.get(action)
 
-    def can_reliably_plan(self, action: Optional[str] = None) -> bool:
+    def can_reliably_plan(self, action: str | None = None) -> bool:
         """
         Gating check: Deep forward planning is authorized ONLY when
         sufficient evidence confirms high predictive fidelity.
@@ -1067,6 +1104,8 @@ class BeliefStateWorldModel:
         self, action: str, prev_frame: np.ndarray, curr_frame: np.ndarray
     ):
         """Validates predicted movement of the avatar against observed frame displacement."""
+        if self.avatar_color is None:
+            return
         prev_pos = self._find_entity_centroid(prev_frame, self.avatar_color)
         curr_pos = self._find_entity_centroid(curr_frame, self.avatar_color)
 
@@ -1109,9 +1148,7 @@ class BeliefStateWorldModel:
                     if hyp.evidence_count >= 2 and hyp.accuracy() < 0.3:
                         hyp.falsified = True
 
-    def _find_entity_centroid(
-        self, frame: np.ndarray, color: int
-    ) -> Optional[Tuple[float, float]]:
+    def _find_entity_centroid(self, frame: np.ndarray, color: int) -> tuple[float, float] | None:
         coords = np.argwhere(frame == color)
         if len(coords) == 0:
             return None
@@ -1136,8 +1173,8 @@ class BeliefStateWorldModel:
         self.belief.one_step_accuracy = (total_corr / total_ev) if total_ev > 0 else 0.0
 
     def predict_next_avatar_pos(
-        self, curr_pos: Tuple[int, int], action: str
-    ) -> Optional[Tuple[int, int]]:
+        self, curr_pos: tuple[int, int], action: str
+    ) -> tuple[int, int] | None:
         """Predicts next avatar position under verified empirical displacement or top hypothesis."""
         disp = self.get_action_displacement(action)
         if disp is not None:
@@ -1150,6 +1187,7 @@ class BeliefStateWorldModel:
             return None
         dy, dx = self.DELTA_MAP[direction]
         return (curr_pos[0] + dy, curr_pos[1] + dx)
+
 
 # ======================================================================
 # INLINED: epistemic_policy.py
@@ -1165,9 +1203,10 @@ Integrates:
 """
 
 from collections import deque
-from typing import Any, Dict, List, Optional, Set, Tuple
-import numpy as np
+from collections.abc import Collection
+from typing import Any
 
+import numpy as np
 
 
 class EpistemicPolicy:
@@ -1181,9 +1220,9 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
-        reasoning_state: Optional[PersistentReasoningState] = None,
-        cognitive_analysis: Optional[CognitiveHierarchyAnalysis] = None,
-    ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
+        reasoning_state: PersistentReasoningState | None = None,
+        cognitive_analysis: CognitiveHierarchyAnalysis | None = None,
+    ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """
         Selects next physical environment action given current belief state.
         Guaranteed to return a legal action from observation.available_actions.
@@ -1246,7 +1285,9 @@ class EpistemicPolicy:
                     proposed_action=planned_action,
                 )
                 if p_pos is not None:
-                    reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
+                    reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(
+                        p_pos, action
+                    )
                 trace = DecisionTrace(
                     level=observation.level,
                     step=self.step_counter,
@@ -1296,7 +1337,9 @@ class EpistemicPolicy:
                         proposed_action=chosen,
                     )
                     if reasoning_state is not None:
-                        reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
+                        reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(
+                            p_pos, action
+                        )
                     trace = DecisionTrace(
                         level=observation.level,
                         step=self.step_counter,
@@ -1312,11 +1355,11 @@ class EpistemicPolicy:
 
         # 4. Exploitation Mode: Validated model allows forward planning (if not in loop)
         if world_model.can_reliably_plan() and not is_loop:
-            action, payload, trace = self._plan_goal_trajectory(
-                observation, analysis, world_model
-            )
+            action, payload, trace = self._plan_goal_trajectory(observation, analysis, world_model)
             if reasoning_state is not None and p_pos is not None:
-                reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
+                reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(
+                    p_pos, action
+                )
             return action, payload, trace
 
         # 5. Epistemic Probing Mode / Deadlock Breaker
@@ -1332,9 +1375,9 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
-        reasoning_state: Optional[PersistentReasoningState] = None,
+        reasoning_state: PersistentReasoningState | None = None,
         is_loop: bool = False,
-    ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
+    ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """Selects informative probe action to distinguish candidate transition models or break deadlocks."""
         available = list(observation.available_actions)
 
@@ -1345,7 +1388,8 @@ class EpistemicPolicy:
 
         # Prioritize untested actions in world_model.action_stats
         untested = [
-            a for a in candidate_probes
+            a
+            for a in candidate_probes
             if a not in getattr(world_model, "action_stats", {})
             or world_model.action_stats[a]["attempts"] == 0
         ]
@@ -1362,7 +1406,11 @@ class EpistemicPolicy:
         if selected == "ACTION6":
             # Bounded coordinate selection: choose entity centroid clamped to [0, 63]
             if analysis.entities:
-                play_entities = [e for e in analysis.entities if 1 < int(e.centroid[0]) < 62 and 1 < int(e.centroid[1]) < 62]
+                play_entities = [
+                    e
+                    for e in analysis.entities
+                    if 1 < int(e.centroid[0]) < 62 and 1 < int(e.centroid[1]) < 62
+                ]
                 pool = play_entities if play_entities else analysis.entities
                 target_ent = pool[self.step_counter % len(pool)]
                 cy, cx = target_ent.centroid
@@ -1402,7 +1450,7 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
-    ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
+    ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """Plans shortest path to candidate goal under validated transition dynamics."""
         frame = observation.frames[0]
         avatar_color = world_model.avatar_color
@@ -1449,27 +1497,27 @@ class EpistemicPolicy:
 
     def _astar_search(
         self,
-        start: Tuple[int, int],
-        goal: Tuple[int, int],
-        grid_shape: Tuple[int, int],
-        obstacles: Set[Tuple[int, int]],
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        grid_shape: tuple[int, int],
+        obstacles: set[tuple[int, int]],
         world_model: BeliefStateWorldModel,
-        available_actions: Set[str],
-        reasoning_state: Optional[PersistentReasoningState] = None,
-    ) -> Optional[List[str]]:
+        available_actions: Collection[str],
+        reasoning_state: PersistentReasoningState | None = None,
+    ) -> list[str] | None:
         """A* search towards goal avoiding static obstacles and lethal death coordinates."""
         H, W = grid_shape
         import heapq
 
-        default_deltas = {
+        default_deltas: dict[str, tuple[int, int]] = {
             "ACTION1": (-1, 0),  # UP
-            "ACTION2": (1, 0),   # DOWN
+            "ACTION2": (1, 0),  # DOWN
             "ACTION3": (0, -1),  # LEFT
-            "ACTION4": (0, 1),   # RIGHT
+            "ACTION4": (0, 1),  # RIGHT
         }
 
         # Build action displacement mapping from empirical learning and world model
-        action_deltas = {}
+        action_deltas: dict[str, tuple[int, int]] = {}
         known_step_sizes = []
         for act in ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5"):
             if act in available_actions:
@@ -1497,10 +1545,10 @@ class EpistemicPolicy:
         nav_obstacles = set(obstacles) - {start, goal}
 
         # Priority queue stores (f_score, cost, current_pos, path)
-        def h(pos: Tuple[int, int]) -> int:
+        def h(pos: tuple[int, int]) -> int:
             return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
 
-        heap = [(h(start), 0, start, [])]
+        heap: list[tuple[int, int, tuple[int, int], list[str]]] = [(h(start), 0, start, [])]
         visited = {start: 0}
         max_expansions = 200  # Bound computation
         goal_tolerance = max(1, base_step)
@@ -1551,18 +1599,20 @@ class EpistemicPolicy:
 
     def _bfs_search(
         self,
-        start: Tuple[int, int],
-        goal: Tuple[int, int],
-        grid_shape: Tuple[int, int],
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        grid_shape: tuple[int, int],
         world_model: BeliefStateWorldModel,
-        available_actions: Set[str],
-    ) -> Optional[List[str]]:
+        available_actions: Collection[str],
+    ) -> list[str] | None:
         """Bounded BFS search over validated directional dynamics."""
         H, W = grid_shape
-        queue = deque([(start, [])])
+        queue: deque[tuple[tuple[int, int], list[str]]] = deque([(start, [])])
         visited = {start}
 
-        dir_actions = [a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available_actions]
+        dir_actions = [
+            a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available_actions
+        ]
         max_depth = 40
 
         while queue:
@@ -1584,6 +1634,7 @@ class EpistemicPolicy:
 
         return None
 
+
 # ======================================================================
 # INLINED: scoped_memory.py
 # ======================================================================
@@ -1595,19 +1646,21 @@ Invalidates facts upon prediction error, and records hashable transition event l
 for reproducible replay analysis and debugging.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
 
 
 @dataclass(frozen=True)
 class TransitionEvent:
     """Hashable record of an environment transition and agent decision."""
+
     step: int
     level: int
     from_frame_hash: str
     action: str
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     to_state: str
     to_frame_hash: str
     planning_mode: str
@@ -1624,9 +1677,9 @@ class ScopedEpisodeMemory:
         self.run_id = run_id
 
         # Invariants carried across levels of the same game run
-        self.confirmed_invariants: Dict[str, Any] = {}
-        self.events: List[TransitionEvent] = []
-        self.forbidden_transitions: set[Tuple[str, str]] = set()
+        self.confirmed_invariants: dict[str, Any] = {}
+        self.events: list[TransitionEvent] = []
+        self.forbidden_transitions: set[tuple[str, str]] = set()
 
     def reset_for_new_game(self, game_key: str, version: str = "1.0", run_id: str = "0"):
         """Completely resets all memories when switching to a novel environment."""
@@ -1643,7 +1696,7 @@ class ScopedEpisodeMemory:
         level: int,
         from_frame: np.ndarray,
         action: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         to_state: str,
         to_frame: np.ndarray,
         planning_mode: str,
@@ -1676,6 +1729,7 @@ class ScopedEpisodeMemory:
         frame_hash = str(hash(frame.tobytes()))
         return (frame_hash, action) in self.forbidden_transitions
 
+
 # ======================================================================
 # PRIMARY AGENT: my_agent.py
 # ======================================================================
@@ -1690,18 +1744,19 @@ Integrates:
 5. Scoped episode memory (bounds invariants to game run, avoids negative transfer).
 """
 
-import hashlib
-from typing import Any, Dict, List, Optional, Set, Tuple
-import numpy as np
 
-from arcengine import GameAction, GameState, FrameDataRaw
+from typing import Any
+
+import numpy as np
+from arcengine import GameAction, GameState
+
 
 # When running in official starter, `Agent` is imported from `agents.agent`
 try:
     from agents.agent import Agent
 except ImportError:
     # Base fallback for local testing without the starter framework wrapper
-    class Agent:
+    class Agent:  # type: ignore[no-redef]
         def __init__(self, game_id: str = "local_game", *args: Any, **kwargs: Any):
             self.game_id = game_id
 
@@ -1710,9 +1765,16 @@ class MyAgent(Agent):
     """
     Production-ready Uncertainty-Aware Agent for ARC-AGI-3.
     """
+
     MAX_ACTIONS = 1000
 
-    def __init__(self, game_id: str = "default_game", parameters: Optional[Dict[str, Any]] = None, *args: Any, **kwargs: Any):
+    def __init__(
+        self,
+        game_id: str = "default_game",
+        parameters: dict[str, Any] | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ):
         super().__init__(*args, **kwargs)
         self.game_id = getattr(self, "game_id", game_id)
         self.parameters = parameters or {}
@@ -1724,10 +1786,10 @@ class MyAgent(Agent):
         self.reasoning_state = PersistentReasoningState(game_id=self.game_id)
         self.compactor = ContextCompactor()
 
-        self.previous_observation: Optional[Observation] = None
-        self.previous_analysis: Optional[FrameAnalysis] = None
-        self.previous_cognitive: Optional[CognitiveHierarchyAnalysis] = None
-        self.previous_action: Optional[str] = None
+        self.previous_observation: Observation | None = None
+        self.previous_analysis: FrameAnalysis | None = None
+        self.previous_cognitive: CognitiveHierarchyAnalysis | None = None
+        self.previous_action: str | None = None
         self.action_count = 0
 
     def is_done(self, frames: Any, latest_frame: Any) -> bool:
@@ -1807,7 +1869,10 @@ class MyAgent(Agent):
         if cognitive_analysis.player_color is not None:
             if self.reasoning_state.player_color is None or cognitive_analysis.is_stagnant:
                 self.reasoning_state.player_color = cognitive_analysis.player_color
-            elif cognitive_analysis.player_color != self.reasoning_state.player_color and prev_grid is not None:
+            elif (
+                cognitive_analysis.player_color != self.reasoning_state.player_color
+                and prev_grid is not None
+            ):
                 self.reasoning_state.player_color = cognitive_analysis.player_color
 
         # 2. Update Reasoning Persistence (Causal displacements & deaths)

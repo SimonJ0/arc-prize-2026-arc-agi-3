@@ -3,14 +3,13 @@ Unit tests for Transformer Cross-Encoder pipeline specification and script gener
 """
 
 import numpy as np
-import pytest
-from pathlib import Path
+
 from src.models.transformer_head import (
+    TransformerModelConfig,
+    TransformerPipelineSpec,
+    compute_symmetric_probabilities,
     format_cross_encoder_text,
     format_swapped_cross_encoder_text,
-    compute_symmetric_probabilities,
-    TransformerPipelineSpec,
-    TransformerModelConfig,
 )
 
 
@@ -46,7 +45,9 @@ def test_symmetric_probabilities():
 
 
 def test_generate_kaggle_finetune_script(tmp_path):
-    spec = TransformerPipelineSpec(TransformerModelConfig(pretrained_model_name="microsoft/deberta-v3-small"))
+    spec = TransformerPipelineSpec(
+        TransformerModelConfig(pretrained_model_name="microsoft/deberta-v3-small")
+    )
     out_script = tmp_path / "finetune_deberta.py"
     generated_path = spec.generate_kaggle_finetune_script(str(out_script))
 

@@ -4,12 +4,13 @@ Produces verified submission.csv and standalone Kaggle kernels for code competit
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
-from src.core.metrics import CLASSES, normalize_probabilities
 from src.core.gates import ValidationGatekeeper
+from src.core.metrics import normalize_probabilities
 
 
 class SubmissionGenerator:
@@ -31,12 +32,14 @@ class SubmissionGenerator:
         """
         preds_norm = normalize_probabilities(preds)
 
-        sub_df = pd.DataFrame({
-            "id": test_df["id"].values,
-            "winner_model_a": preds_norm[:, 0],
-            "winner_model_b": preds_norm[:, 1],
-            "winner_tie": preds_norm[:, 2],
-        })
+        sub_df = pd.DataFrame(
+            {
+                "id": test_df["id"].values,
+                "winner_model_a": preds_norm[:, 0],
+                "winner_model_b": preds_norm[:, 1],
+                "winner_tie": preds_norm[:, 2],
+            }
+        )
 
         # Strict validation
         gate_res = self.gatekeeper.verify_submission_format(sub_df, test_df)
@@ -49,10 +52,10 @@ class SubmissionGenerator:
 
     def generate_standalone_kaggle_kernel(
         self,
-        lgb_model_str: Optional[str] = None,
-        ensemble_weights: Optional[dict] = None,
+        lgb_model_str: str | None = None,
+        ensemble_weights: dict | None = None,
         temperature: float = 1.0,
-        lsa_data: Optional[dict] = None,
+        lsa_data: dict | None = None,
         output_filename: str = "kaggle_submission_kernel.py",
     ) -> Path:
         """
@@ -61,7 +64,7 @@ class SubmissionGenerator:
         with TTA symmetry, and outputting submission.csv within Kaggle's notebook environment.
         Compressed with LZMA to guarantee kernel source size is strictly < 1MB for Kaggle API.
         """
-        package_dict = {}
+        package_dict: dict[str, Any] = {}
         if lgb_model_str is not None:
             package_dict["booster"] = lgb_model_str
         if lsa_data is not None:
@@ -80,6 +83,7 @@ class SubmissionGenerator:
             import base64
             import lzma
             import pickle
+
             model_blob_b64 = base64.b64encode(
                 lzma.compress(pickle.dumps(package_dict), preset=9 | lzma.PRESET_EXTREME)
             ).decode("ascii")
@@ -111,7 +115,7 @@ ENSEMBLE_WEIGHTS = {weights_repr}
 TEMPERATURE = {temperature}
 
 LIST_PATTERN = re.compile(r"^\s*([*\-+]|\d+\.)\s+", re.MULTILINE)
-HEADER_PATTERN = re.compile(r"^\s*#{1,6}\s+", re.MULTILINE)
+HEADER_PATTERN = re.compile(r"^\s*#{1, 6}\s+", re.MULTILINE)
 TABLE_PATTERN = re.compile(r"\|(?:\s*:?---+:?\s*\|)+")
 LATEX_PATTERN = re.compile(r"(\$\$[\s\S]*?\$\$|\$[^\$]+?\$|\\[a-zA-Z]+)")
 DISCLAIMER_PATTERN = re.compile(

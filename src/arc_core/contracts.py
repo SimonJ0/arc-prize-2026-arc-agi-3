@@ -5,28 +5,31 @@ action proposals, decision traces, and transition events.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any
+
 import numpy as np
 
 
 @dataclass(frozen=True)
 class Observation:
     """Immutable snapshot of the environment state returned by ARC-AGI-3."""
-    frames: Tuple[np.ndarray, ...]  # (H, W) arrays with values in [0, 15]
-    state: str                      # 'NOT_PLAYED', 'NOT_FINISHED', 'WIN', 'GAME_OVER'
+
+    frames: tuple[np.ndarray, ...]  # (H, W) arrays with values in [0, 15]
+    state: str  # 'NOT_PLAYED', 'NOT_FINISHED', 'WIN', 'GAME_OVER'
     available_actions: frozenset[str]  # e.g. {'RESET', 'ACTION1', 'ACTION2', ...}
-    game_key: str                   # Environment / game ID
-    level: int                      # Current level index (1-based)
-    action_count: int               # Actions taken so far in this level/game
-    guid: Optional[str] = None      # Session GUID
+    game_key: str  # Environment / game ID
+    level: int  # Current level index (1-based)
+    action_count: int  # Actions taken so far in this level/game
+    guid: str | None = None  # Session GUID
 
 
 @dataclass(frozen=True)
 class Transition:
     """Observed transition between two consecutive environment states."""
+
     from_observation_hash: str
     action: str
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     to_state: str
     to_observation_hash: str
     frame_diff_count: int
@@ -35,9 +38,10 @@ class Transition:
 @dataclass
 class TransitionModelHypothesis:
     """Single hypothesis about environment mechanics / transition rules."""
+
     hypothesis_id: str
     description: str
-    action_semantics: Dict[str, str] = field(default_factory=dict)  # e.g. {'ACTION1': 'MOVE_UP'}
+    action_semantics: dict[str, str] = field(default_factory=dict)  # e.g. {'ACTION1': 'MOVE_UP'}
     confidence: float = 0.5
     falsified: bool = False
     evidence_count: int = 0
@@ -52,13 +56,14 @@ class TransitionModelHypothesis:
 @dataclass
 class WorldModelBelief:
     """Factored belief state representing a posterior distribution over transition hypotheses."""
-    hypotheses: List[TransitionModelHypothesis] = field(default_factory=list)
+
+    hypotheses: list[TransitionModelHypothesis] = field(default_factory=list)
     posterior: np.ndarray = field(default_factory=lambda: np.array([]))
     one_step_accuracy: float = 0.0
     rollout_accuracy: float = 0.0
-    evidence: List[Transition] = field(default_factory=list)
+    evidence: list[Transition] = field(default_factory=list)
 
-    def get_most_likely_hypothesis(self) -> Optional[TransitionModelHypothesis]:
+    def get_most_likely_hypothesis(self) -> TransitionModelHypothesis | None:
         active = [h for h in self.hypotheses if not h.falsified]
         if not active:
             return None
@@ -68,6 +73,7 @@ class WorldModelBelief:
 @dataclass(frozen=True)
 class GoalHypothesis:
     """Hypothesis about the winning terminal condition of a level."""
+
     goal_id: str
     predicate_type: str  # e.g. 'TARGET_REACHED', 'COLOR_CLEARED', 'PATTERN_MATCH'
     confidence: float = 0.5
@@ -77,8 +83,9 @@ class GoalHypothesis:
 @dataclass(frozen=True)
 class ActionProposal:
     """Candidate action evaluated under current world-model beliefs."""
+
     action: str
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
     expected_completion_value: float = 0.0
     expected_information_gain: float = 0.0
     risk_game_over: float = 0.0
@@ -87,18 +94,23 @@ class ActionProposal:
     @property
     def score(self) -> float:
         """Heuristic value combining completion utility and epistemic gain penalized by risk."""
-        return self.expected_completion_value + 0.4 * self.expected_information_gain - 2.0 * self.risk_game_over
+        return (
+            self.expected_completion_value
+            + 0.4 * self.expected_information_gain
+            - 2.0 * self.risk_game_over
+        )
 
 
 @dataclass(frozen=True)
 class DecisionTrace:
     """Trace of agent reasoning for a single physical step."""
+
     level: int
     step: int
     observation_hash: str
-    legal_actions: Tuple[str, ...]
+    legal_actions: tuple[str, ...]
     selected_action: str
-    selected_payload: Dict[str, Any]
+    selected_payload: dict[str, Any]
     planning_mode: str  # 'EPISTEMIC_PROBE', 'GOAL_PLAN', 'LEGAL_FALLBACK', 'RESET_RECOVERY'
-    predicted_next_state: Optional[str]
+    predicted_next_state: str | None
     confidence: float

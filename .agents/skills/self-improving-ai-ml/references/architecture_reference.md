@@ -115,10 +115,10 @@ class TaskSpec:
     primary_metric: str
     minimize: bool
     probability_semantics: Literal[
-        "simplex",               # sum(p) == 1 (multiclass softmax)
-        "independent_bernoulli", # p in [0, 1] per class (multilabel sigmoid)
-        "continuous",            # unbounded continuous (regression)
-        "ranking_score",         # real-valued sorting scores
+        "simplex",  # sum(p) == 1 (multiclass softmax)
+        "independent_bernoulli",  # p in [0, 1] per class (multilabel sigmoid)
+        "continuous",  # unbounded continuous (regression)
+        "ranking_score",  # real-valued sorting scores
     ]
     group_key: Optional[str] = None
     time_key: Optional[str] = None

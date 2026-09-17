@@ -7,22 +7,21 @@ Enforces the Cryptographic Iron Rule submission workflow with strict command bou
 """
 
 from __future__ import annotations
+
 import argparse
 from pathlib import Path
-import sys
+
 import numpy as np
 
-from src.submit.submission_gate import SubmissionAuthorizationGate
-from src.arc_core.metrics import EnvironmentEvaluation, LevelMetric
-from src.arc_core.arc_loop import ArcResearchLoop
 from agent.my_agent import MyAgent
+from src.arc_core.arc_loop import ArcResearchLoop
+from src.submit.submission_gate import SubmissionAuthorizationGate
 
 
 def cmd_run_arc(args):
     """Executes the autonomous research loop over ARC-AGI-3 hypotheses."""
     loop = ArcResearchLoop(hypotheses_path=args.hypotheses)
     loop.run_all(force=args.force)
-
 
 
 def cmd_build_submission(args):
@@ -46,7 +45,7 @@ def cmd_submit(args):
     gate = SubmissionAuthorizationGate()
 
     if args.approval:
-        print(f"\nHUMAN AUTHORIZATION TOKEN SUPPLIED: Initiating pre-upload verification...")
+        print("\nHUMAN AUTHORIZATION TOKEN SUPPLIED: Initiating pre-upload verification...")
         gate.submit_with_approval(signed_token=args.approval)
     elif args.reject:
         exp_id = args.reject
@@ -67,6 +66,7 @@ def cmd_play(args):
     if args.game != "synthetic_nav":
         try:
             import arc_agi
+
             arcade = arc_agi.Arcade()
             envs = arcade.get_environments()
             env_id = args.game
@@ -78,7 +78,9 @@ def cmd_play(args):
             env = arcade.make(env_id)
             agent = MyAgent(game_id=env_id)
             frame_data = env.reset()
-            print(f"Initial State: {frame_data.state} | available_actions: {frame_data.available_actions}")
+            print(
+                f"Initial State: {frame_data.state} | available_actions: {frame_data.available_actions}"
+            )
 
             for step in range(1, args.max_steps + 1):
                 if agent.is_done(frame_data.frame, frame_data):
@@ -96,6 +98,7 @@ def cmd_play(args):
             print(f"Notice: Unable to run on Arcade ({e}). Falling back to synthetic simulation...")
 
     print(f"Executing MyAgent locally on environment: {args.game}...")
+
     # Mock / synthetic run verification
     class SyntheticEnv:
         def __init__(self, game_id: str):
@@ -140,9 +143,9 @@ def cmd_play(args):
             break
 
 
-
 def cmd_eval_platform(args):
     from src.arc_core.platform_bench import PlatformBenchmarkSuite
+
     suite = PlatformBenchmarkSuite()
     games_subset = [g.strip() for g in args.games.split(",")] if args.games else None
     if getattr(args, "budgets", None):
@@ -169,17 +172,34 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # 0. Run Autonomous Research Loop
-    arc_parser = subparsers.add_parser("run-arc", help="Launch autonomous self-improving research loop")
-    arc_parser.add_argument("--hypotheses", default="configs/arc_hypotheses.yaml", help="Path to hypotheses yaml")
-    arc_parser.add_argument("--force", action="store_true", help="Force re-evaluation of completed experiments")
+    arc_parser = subparsers.add_parser(
+        "run-arc", help="Launch autonomous self-improving research loop"
+    )
+    arc_parser.add_argument(
+        "--hypotheses", default="configs/arc_hypotheses.yaml", help="Path to hypotheses yaml"
+    )
+    arc_parser.add_argument(
+        "--force", action="store_true", help="Force re-evaluation of completed experiments"
+    )
 
     # 1. Build Submission
-    build_parser = subparsers.add_parser("build-submission", help="Build and hash submission notebook (Zero network)")
-    build_parser.add_argument("--accelerator", default="t4", choices=["cpu", "t4", "p100", "rtx6000"], help="Kaggle accelerator")
+    build_parser = subparsers.add_parser(
+        "build-submission", help="Build and hash submission notebook (Zero network)"
+    )
+    build_parser.add_argument(
+        "--accelerator",
+        default="t4",
+        choices=["cpu", "t4", "p100", "rtx6000"],
+        help="Kaggle accelerator",
+    )
 
     # 2. Request Approval
-    req_parser = subparsers.add_parser("request-approval", help="Generate signed authorization brief and token")
-    req_parser.add_argument("--exp-id", required=True, help="Experiment ID to request authorization for")
+    req_parser = subparsers.add_parser(
+        "request-approval", help="Generate signed authorization brief and token"
+    )
+    req_parser.add_argument(
+        "--exp-id", required=True, help="Experiment ID to request authorization for"
+    )
     req_parser.add_argument("--eval-file", help="Path to evaluation scorecard file")
     req_parser.add_argument("--notes", help="Optional human-readable notes")
 
@@ -195,11 +215,17 @@ def main():
     play_parser.add_argument("--max-steps", type=int, default=30, help="Max physical steps")
 
     # 5. Evaluate on Official Platform
-    plat_parser = subparsers.add_parser("eval-platform", help="Run official platform benchmark on real ARC-AGI-3 games")
-    plat_parser.add_argument("--split", default="train", choices=["train", "holdout", "all"], help="Dataset split")
+    plat_parser = subparsers.add_parser(
+        "eval-platform", help="Run official platform benchmark on real ARC-AGI-3 games"
+    )
+    plat_parser.add_argument(
+        "--split", default="train", choices=["train", "holdout", "all"], help="Dataset split"
+    )
     plat_parser.add_argument("--games", type=str, help="Comma-separated game IDs (overrides split)")
     plat_parser.add_argument("--max-actions", type=int, default=100, help="Max actions per game")
-    plat_parser.add_argument("--budgets", type=str, help="Comma-separated action budgets (e.g. 50,100,200)")
+    plat_parser.add_argument(
+        "--budgets", type=str, help="Comma-separated action budgets (e.g. 50,100,200)"
+    )
     plat_parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()

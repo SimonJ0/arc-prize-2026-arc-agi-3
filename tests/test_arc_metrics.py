@@ -2,8 +2,7 @@
 Unit tests for ARC-AGI-3 RHAE metrics and local proxy evaluators.
 """
 
-import pytest
-from src.arc_core.metrics import LevelMetric, EnvironmentEvaluation, compute_benchmark_rhae
+from src.arc_core.metrics import EnvironmentEvaluation, LevelMetric
 
 
 def test_level_metric_score_and_cap():

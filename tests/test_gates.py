@@ -4,7 +4,7 @@ Unit tests for validation gates.
 
 import numpy as np
 import pandas as pd
-import pytest
+
 from src.core.gates import ValidationGatekeeper
 
 
@@ -43,12 +43,14 @@ def test_submission_format_gate():
     test_df = pd.DataFrame({"id": [101, 102], "prompt": ["p1", "p2"]})
 
     # Valid submission
-    sub_df = pd.DataFrame({
-        "id": [101, 102],
-        "winner_model_a": [0.4, 0.3],
-        "winner_model_b": [0.4, 0.3],
-        "winner_tie": [0.2, 0.4],
-    })
+    sub_df = pd.DataFrame(
+        {
+            "id": [101, 102],
+            "winner_model_a": [0.4, 0.3],
+            "winner_model_b": [0.4, 0.3],
+            "winner_tie": [0.2, 0.4],
+        }
+    )
     res = gk.verify_submission_format(sub_df, test_df)
     assert res.passed
 
@@ -61,7 +63,7 @@ def test_submission_format_gate():
 
 def test_diversity_gate():
     gk = ValidationGatekeeper(max_ensemble_correlation=0.95)
-    
+
     # First model always passes
     m1 = np.array([[0.6, 0.2, 0.2], [0.1, 0.8, 0.1]])
     res_first = gk.check_diversity(m1, [])
@@ -82,7 +84,7 @@ def test_leakage_gate_nan_and_inf():
     gk = ValidationGatekeeper()
     train_ids = np.array([1, 2])
     val_ids = np.array([3, 4])
-    
+
     # NaN
     preds_nan = np.array([[np.nan, 0.5, 0.5], [0.3, 0.3, 0.4]])
     assert not gk.check_leakage(train_ids, val_ids, preds_nan).passed

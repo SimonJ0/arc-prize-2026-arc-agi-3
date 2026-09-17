@@ -3,9 +3,8 @@ Unit tests for convex ensemble blending and nested CV optimization.
 """
 
 import numpy as np
-import pytest
+
 from src.models.ensemble import EnsembleBlender
-from src.core.metrics import compute_log_loss
 
 
 def test_ensemble_blender_weights_sum_to_one():
@@ -22,6 +21,7 @@ def test_ensemble_blender_weights_sum_to_one():
     blender = EnsembleBlender(names=["m1", "m2"])
     blender.fit([oof1, oof2], y_true)
 
+    assert blender.weights is not None
     assert len(blender.weights) == 2
     assert np.isclose(np.sum(blender.weights), 1.0)
     assert (blender.weights >= 0).all()
@@ -44,6 +44,7 @@ def test_ensemble_nested_cv():
     blender = EnsembleBlender(names=["m1", "m2"])
     blender.fit_with_nested_cv([oof1, oof2], y_true, n_blend_folds=3)
 
+    assert blender.weights is not None
     assert len(blender.weights) == 2
     assert np.isclose(np.sum(blender.weights), 1.0)
     assert (blender.weights >= 0).all()

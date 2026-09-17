@@ -11,15 +11,14 @@ Command Boundaries:
 """
 
 from __future__ import annotations
-from datetime import datetime, timezone, timedelta
+
 import hashlib
 import hmac
-import json
-import os
-from pathlib import Path
 import subprocess
 import sys
-from typing import Any, Dict, Optional, Tuple
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SECRET_SALT = b"arc-prize-2026-iron-rule-salt-sec42"
@@ -34,7 +33,7 @@ def compute_file_sha256(filepath: Path) -> str:
     return h.hexdigest()
 
 
-def get_git_info() -> Tuple[str, bool]:
+def get_git_info() -> tuple[str, bool]:
     """Returns (commit_hash, is_clean)."""
     try:
         commit = subprocess.check_output(
@@ -63,15 +62,15 @@ class SubmissionAuthorizationGate:
         if not self.config_path.exists():
             self.config_path = ROOT / "configs" / "arc_default_config.yaml"
 
-    def build_submission(self, accelerator: str = "t4") -> Dict[str, Any]:
+    def build_submission(self, accelerator: str = "t4") -> dict[str, Any]:
         """
         Build & Hash Only.
         Inlines agent, compiles notebooks/submission.ipynb, and outputs SHA-256 hashes.
         STRICT BOUNDARY: Does not contact Kaggle API or initiate any upload.
         """
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("IRON RULE: BUILDING ARC-AGI-3 SUBMISSION ARTIFACT (NO-NETWORK LOCAL BUILD)")
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
 
         # 1. Run agent bundler with clean-room verification
         bundled_agent_path = ROOT / "agent" / "bundled_my_agent.py"
@@ -119,19 +118,21 @@ class SubmissionAuthorizationGate:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        print(f"Artifact successfully built and verified offline:")
+        print("Artifact successfully built and verified offline:")
         print(f"  - Notebook Path:   {self.notebook_path}")
         print(f"  - Notebook SHA256: {nb_hash}")
         print(f"  - Agent SHA256:    {agent_hash}")
         print(f"  - Git Commit:      {commit} (Clean: {is_clean})")
         print(f"  - Config SHA256:   {cfg_hash}")
-        print("\nNote: ZERO network requests were made. Use `request-approval` to generate an upload token.\n")
+        print(
+            "\nNote: ZERO network requests were made. Use `request-approval` to generate an upload token.\n"
+        )
         return provenance
 
     def request_approval(
         self,
         exp_id: str,
-        eval_scorecard_path: Optional[str] = None,
+        eval_scorecard_path: str | None = None,
         notes: str = "",
     ) -> str:
         """
@@ -139,7 +140,9 @@ class SubmissionAuthorizationGate:
         and issues a signed, time-bounded approval token expiring in 2 hours.
         """
         if not self.notebook_path.exists():
-            raise FileNotFoundError(f"Notebook not found at {self.notebook_path}. Run build-submission first.")
+            raise FileNotFoundError(
+                f"Notebook not found at {self.notebook_path}. Run build-submission first."
+            )
 
         nb_hash = compute_file_sha256(self.notebook_path)
         cfg_hash = compute_file_sha256(self.config_path)
@@ -171,7 +174,7 @@ class SubmissionAuthorizationGate:
 - **Config SHA-256**: `{cfg_hash}`
 - **Evaluation Hash**: `{eval_hash}`
 - **Token Expiry**: `{expiry_str}` (Valid for 2 hours)
-- **Additional Notes**: {notes or 'None'}
+- **Additional Notes**: {notes or "None"}
 
 ### Pre-Upload Verification Checklist
 - [x] Offline clean-room import test passed with zero errors
@@ -202,20 +205,35 @@ python cli.py submit --reject "{exp_id}" --reason "Explain reason"
         print(f"Approval Token (expires in 2h):\n{signed_token}\n")
         return signed_token
 
+    def request_authorization(
+        self,
+        exp_id: str,
+        model_name: str = "",
+        oof_log_loss: float = 0.0,
+        best_log_loss: float | None = None,
+        submission_csv_path: str | Path | None = None,
+        preview_df: Any = None,
+        notes: str = "",
+    ) -> Path:
+        """Generates formal submission authorization request for research loop and returns request file path."""
+        notes_str = f"Model: {model_name} | OOF Loss: {oof_log_loss:.5f} | Best Loss: {best_log_loss} | {notes}".strip()
+        self.request_approval(exp_id=exp_id, notes=notes_str)
+        return self.reports_dir / "SUBMISSION_AUTHORIZATION_REQUEST.md"
+
     def submit_with_approval(
         self,
         signed_token: str,
         competition: str = "arc-prize-2026-arc-agi-3",
         message: str = "ARC-AGI-3 Agent Submission",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         THE ONLY METHOD PERMITTED TO CALL KAGGLE API.
         Immediately re-verifies all hashes, git commit, and token expiry before upload.
         Fails closed instantly if any byte or state has changed.
         """
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print("IRON RULE: PRE-UPLOAD CRYPTOGRAPHIC RE-VERIFICATION")
-        print(f"{'='*70}\n")
+        print(f"{'=' * 70}\n")
 
         # 1. Parse and verify token signature
         if "||" not in signed_token:
@@ -223,7 +241,9 @@ python cli.py submit --reject "{exp_id}" --reason "Explain reason"
             sys.exit(1)
 
         payload_str, sig = signed_token.split("||", 1)
-        expected_sig = hmac.new(SECRET_SALT, payload_str.encode("utf-8"), hashlib.sha256).hexdigest()
+        expected_sig = hmac.new(
+            SECRET_SALT, payload_str.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
         if not hmac.compare_digest(sig, expected_sig):
             print("FAIL CLOSED: Invalid token signature. Cryptographic authorization rejected.")
             sys.exit(1)
@@ -244,19 +264,21 @@ python cli.py submit --reject "{exp_id}" --reason "Explain reason"
         # 3. Re-verify current file hashes
         curr_nb_hash = compute_file_sha256(self.notebook_path)
         if curr_nb_hash != token_nb_hash:
-            print(f"FAIL CLOSED: Notebook SHA-256 mutation detected!")
+            print("FAIL CLOSED: Notebook SHA-256 mutation detected!")
             print(f"  Authorized: {token_nb_hash}")
             print(f"  Current:    {curr_nb_hash}")
             sys.exit(1)
 
         curr_commit, is_clean = get_git_info()
         if curr_commit != token_commit:
-            print(f"FAIL CLOSED: Git commit changed since authorization! Authorized: {token_commit}, Current: {curr_commit}")
+            print(
+                f"FAIL CLOSED: Git commit changed since authorization! Authorized: {token_commit}, Current: {curr_commit}"
+            )
             sys.exit(1)
 
         curr_cfg_hash = compute_file_sha256(self.config_path)
         if curr_cfg_hash != token_cfg_hash:
-            print(f"FAIL CLOSED: Config changed since authorization!")
+            print("FAIL CLOSED: Config changed since authorization!")
             sys.exit(1)
 
         print("SUCCESS: All pre-upload cryptographic checks verified. Re-verification PASSED.")
@@ -270,7 +292,6 @@ python cli.py submit --reject "{exp_id}" --reason "Explain reason"
             if res.returncode != 0:
                 print(f"Upload failed or Kaggle CLI error:\n{res.stderr or res.stdout}")
                 return {"success": False, "error": res.stderr or res.stdout}
-
 
             print("\n" + "=" * 70)
             print("PHASE A COMPLETE: Notebook successfully pushed to Kaggle.")
@@ -289,7 +310,7 @@ python cli.py submit --reject "{exp_id}" --reason "Explain reason"
 
     def _create_default_notebook_builder(self, accelerator: str):
         """Creates the official starter build_notebook.py if missing."""
-        script_content = f'''"""Splice bundled agent into notebooks/submission.ipynb."""
+        script_content = '''"""Splice bundled agent into notebooks/submission.ipynb."""
 from pathlib import Path
 import json
 from textwrap import dedent
@@ -304,75 +325,74 @@ NOTEBOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 agent_body = AGENT_SRC.read_text(encoding="utf-8")
 
-notebook = {{
-    "metadata": {{
-        "kernelspec": {{
+notebook = {
+    "metadata": {
+        "kernelspec": {
             "language": "python",
             "display_name": "Python 3",
             "name": "python3",
-        }},
-        "language_info": {{
+        },
+        "language_info": {
             "name": "python",
             "mimetype": "text/x-python",
             "file_extension": ".py",
             "pygments_lexer": "ipython3",
-        }},
-        "kaggle": {{
+        },
+        "kaggle": {
             "accelerator": "nvidiaTeslaT4",
             "isInternetEnabled": False,
             "isGpuEnabled": True,
             "language": "python",
             "sourceType": "notebook",
-        }},
-    }},
+        },
+    },
     "nbformat": 4,
     "nbformat_minor": 5,
     "cells": [
-        {{
+        {
             "cell_type": "markdown",
             "id": "cell-header",
-            "metadata": {{}},
+            "metadata": {},
             "source": "# ARC Prize 2026 Submission",
-        }},
-        {{
+        },
+        {
             "cell_type": "code",
             "id": "cell-install",
-            "metadata": {{"trusted": True}},
+            "metadata": {"trusted": True},
             "execution_count": None,
             "outputs": [],
             "source": "!pip install --no-index --find-links /kaggle/input/competitions/arc-prize-2026-arc-agi-3/arc_agi_3_wheels arc-agi python-dotenv\\n",
-        }},
-        {{
+        },
+        {
             "cell_type": "code",
             "id": "cell-agent",
-            "metadata": {{"trusted": True}},
+            "metadata": {"trusted": True},
             "execution_count": None,
             "outputs": [],
             "source": "%%writefile /tmp/my_agent.py\\n" + agent_body,
-        }},
-        {{
+        },
+        {
             "cell_type": "code",
             "id": "cell-run",
-            "metadata": {{"trusted": True}},
+            "metadata": {"trusted": True},
             "execution_count": None,
             "outputs": [],
             "source": "import os\\n",
-        }},
-        {{
+        },
+        {
             "cell_type": "code",
             "id": "cell-dummy",
-            "metadata": {{"trusted": True}},
+            "metadata": {"trusted": True},
             "execution_count": None,
             "outputs": [],
             "source": "import os\\nif not os.getenv('KAGGLE_IS_COMPETITION_RERUN'):\\n    import pandas as pd\\n    pd.DataFrame(data=[['1_0', '1', True, 1]], columns=['row_id', 'game_id', 'end_of_game', 'score']).to_parquet('/kaggle/working/submission.parquet', index=False)\\n",
-        }},
+        },
     ],
-}}
+}
 
 NOTEBOOK_PATH.write_text(json.dumps(notebook, indent=2), encoding="utf-8")
-print(f"Built submission notebook at: {{NOTEBOOK_PATH}}")
+print(f"Built submission notebook at: {NOTEBOOK_PATH}")
 '''
         build_script = ROOT / "scripts" / "build_notebook.py"
         build_script.parent.mkdir(parents=True, exist_ok=True)
         build_script.write_text(script_content, encoding="utf-8")
-

@@ -8,15 +8,17 @@ Integrates:
 """
 
 from collections import deque
-from typing import Any, Dict, List, Optional, Set, Tuple
+from collections.abc import Collection
+from typing import Any
+
 import numpy as np
 
-from src.arc_core.contracts import ActionProposal, DecisionTrace, Observation
 from src.arc_agent.legality_adapter import LegalityAdapter
+from src.arc_agent.memory.reasoning_state import PersistentReasoningState
+from src.arc_agent.perception.cognitive_hierarchy import CognitiveHierarchyAnalysis
 from src.arc_agent.perception.layered_perception import FrameAnalysis
 from src.arc_agent.world_model.belief_state import BeliefStateWorldModel
-from src.arc_agent.perception.cognitive_hierarchy import CognitiveHierarchyAnalysis
-from src.arc_agent.memory.reasoning_state import PersistentReasoningState
+from src.arc_core.contracts import DecisionTrace, Observation
 
 
 class EpistemicPolicy:
@@ -30,9 +32,9 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
-        reasoning_state: Optional[PersistentReasoningState] = None,
-        cognitive_analysis: Optional[CognitiveHierarchyAnalysis] = None,
-    ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
+        reasoning_state: PersistentReasoningState | None = None,
+        cognitive_analysis: CognitiveHierarchyAnalysis | None = None,
+    ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """
         Selects next physical environment action given current belief state.
         Guaranteed to return a legal action from observation.available_actions.
@@ -95,7 +97,9 @@ class EpistemicPolicy:
                     proposed_action=planned_action,
                 )
                 if p_pos is not None:
-                    reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
+                    reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(
+                        p_pos, action
+                    )
                 trace = DecisionTrace(
                     level=observation.level,
                     step=self.step_counter,
@@ -145,7 +149,9 @@ class EpistemicPolicy:
                         proposed_action=chosen,
                     )
                     if reasoning_state is not None:
-                        reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
+                        reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(
+                            p_pos, action
+                        )
                     trace = DecisionTrace(
                         level=observation.level,
                         step=self.step_counter,
@@ -161,11 +167,11 @@ class EpistemicPolicy:
 
         # 4. Exploitation Mode: Validated model allows forward planning (if not in loop)
         if world_model.can_reliably_plan() and not is_loop:
-            action, payload, trace = self._plan_goal_trajectory(
-                observation, analysis, world_model
-            )
+            action, payload, trace = self._plan_goal_trajectory(observation, analysis, world_model)
             if reasoning_state is not None and p_pos is not None:
-                reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
+                reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(
+                    p_pos, action
+                )
             return action, payload, trace
 
         # 5. Epistemic Probing Mode / Deadlock Breaker
@@ -181,9 +187,9 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
-        reasoning_state: Optional[PersistentReasoningState] = None,
+        reasoning_state: PersistentReasoningState | None = None,
         is_loop: bool = False,
-    ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
+    ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """Selects informative probe action to distinguish candidate transition models or break deadlocks."""
         available = list(observation.available_actions)
 
@@ -194,7 +200,8 @@ class EpistemicPolicy:
 
         # Prioritize untested actions in world_model.action_stats
         untested = [
-            a for a in candidate_probes
+            a
+            for a in candidate_probes
             if a not in getattr(world_model, "action_stats", {})
             or world_model.action_stats[a]["attempts"] == 0
         ]
@@ -211,7 +218,11 @@ class EpistemicPolicy:
         if selected == "ACTION6":
             # Bounded coordinate selection: choose entity centroid clamped to [0, 63]
             if analysis.entities:
-                play_entities = [e for e in analysis.entities if 1 < int(e.centroid[0]) < 62 and 1 < int(e.centroid[1]) < 62]
+                play_entities = [
+                    e
+                    for e in analysis.entities
+                    if 1 < int(e.centroid[0]) < 62 and 1 < int(e.centroid[1]) < 62
+                ]
                 pool = play_entities if play_entities else analysis.entities
                 target_ent = pool[self.step_counter % len(pool)]
                 cy, cx = target_ent.centroid
@@ -251,7 +262,7 @@ class EpistemicPolicy:
         observation: Observation,
         analysis: FrameAnalysis,
         world_model: BeliefStateWorldModel,
-    ) -> Tuple[str, Dict[str, Any], DecisionTrace]:
+    ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """Plans shortest path to candidate goal under validated transition dynamics."""
         frame = observation.frames[0]
         avatar_color = world_model.avatar_color
@@ -298,27 +309,27 @@ class EpistemicPolicy:
 
     def _astar_search(
         self,
-        start: Tuple[int, int],
-        goal: Tuple[int, int],
-        grid_shape: Tuple[int, int],
-        obstacles: Set[Tuple[int, int]],
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        grid_shape: tuple[int, int],
+        obstacles: set[tuple[int, int]],
         world_model: BeliefStateWorldModel,
-        available_actions: Set[str],
-        reasoning_state: Optional[PersistentReasoningState] = None,
-    ) -> Optional[List[str]]:
+        available_actions: Collection[str],
+        reasoning_state: PersistentReasoningState | None = None,
+    ) -> list[str] | None:
         """A* search towards goal avoiding static obstacles and lethal death coordinates."""
         H, W = grid_shape
         import heapq
 
-        default_deltas = {
+        default_deltas: dict[str, tuple[int, int]] = {
             "ACTION1": (-1, 0),  # UP
-            "ACTION2": (1, 0),   # DOWN
+            "ACTION2": (1, 0),  # DOWN
             "ACTION3": (0, -1),  # LEFT
-            "ACTION4": (0, 1),   # RIGHT
+            "ACTION4": (0, 1),  # RIGHT
         }
 
         # Build action displacement mapping from empirical learning and world model
-        action_deltas = {}
+        action_deltas: dict[str, tuple[int, int]] = {}
         known_step_sizes = []
         for act in ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5"):
             if act in available_actions:
@@ -346,10 +357,10 @@ class EpistemicPolicy:
         nav_obstacles = set(obstacles) - {start, goal}
 
         # Priority queue stores (f_score, cost, current_pos, path)
-        def h(pos: Tuple[int, int]) -> int:
+        def h(pos: tuple[int, int]) -> int:
             return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
 
-        heap = [(h(start), 0, start, [])]
+        heap: list[tuple[int, int, tuple[int, int], list[str]]] = [(h(start), 0, start, [])]
         visited = {start: 0}
         max_expansions = 200  # Bound computation
         goal_tolerance = max(1, base_step)
@@ -400,18 +411,20 @@ class EpistemicPolicy:
 
     def _bfs_search(
         self,
-        start: Tuple[int, int],
-        goal: Tuple[int, int],
-        grid_shape: Tuple[int, int],
+        start: tuple[int, int],
+        goal: tuple[int, int],
+        grid_shape: tuple[int, int],
         world_model: BeliefStateWorldModel,
-        available_actions: Set[str],
-    ) -> Optional[List[str]]:
+        available_actions: Collection[str],
+    ) -> list[str] | None:
         """Bounded BFS search over validated directional dynamics."""
         H, W = grid_shape
-        queue = deque([(start, [])])
+        queue: deque[tuple[tuple[int, int], list[str]]] = deque([(start, [])])
         visited = {start}
 
-        dir_actions = [a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available_actions]
+        dir_actions = [
+            a for a in ("ACTION1", "ACTION2", "ACTION3", "ACTION4") if a in available_actions
+        ]
         max_depth = 40
 
         while queue:

@@ -7,23 +7,21 @@ Supports family-disjoint train/holdout splits to prevent public-game overfitting
 
 from __future__ import annotations
 
-import os
-import sys
-import time
 import json
-from dataclasses import dataclass, asdict
+import os
+import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
-
-import numpy as np
-from dotenv import load_dotenv
+from typing import Any
 
 import arc_agi
-from arcengine import GameAction, GameState, FrameDataRaw
+import numpy as np
+from arcengine import FrameDataRaw, GameAction, GameState
+from dotenv import load_dotenv
 
-from src.arc_core.metrics import EnvironmentEvaluation, LevelMetric, compute_benchmark_rhae
 from agent.my_agent import MyAgent
+from src.arc_core.metrics import EnvironmentEvaluation, LevelMetric
 
 # Load environment variables (ARC_API_KEY)
 load_dotenv()
@@ -32,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # Disjoint Train / Holdout Partition of the 25 official platform games
 # 15 Training / Diagnostic Games (for development & regression testing)
-TRAIN_GAMES: List[str] = [
+TRAIN_GAMES: list[str] = [
     "ls20-9607627b",
     "sc25-635fd71a",
     "m0r0-492f87ba",
@@ -51,7 +49,7 @@ TRAIN_GAMES: List[str] = [
 ]
 
 # 10 Frozen Holdout Games (strictly reserved for LCB promotion gates, never tuned against)
-HOLDOUT_GAMES: List[str] = [
+HOLDOUT_GAMES: list[str] = [
     "sp80-589a99af",
     "sb26-7fbdac44",
     "ka59-38d34dbb",
@@ -70,8 +68,8 @@ class PlatformBenchmarkSuite:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
         reports_dir: str = "reports",
     ):
         self.api_key = api_key or os.getenv("ARC_API_KEY")
@@ -79,17 +77,17 @@ class PlatformBenchmarkSuite:
         self.reports_dir = ROOT / reports_dir
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
-        kwargs: Dict[str, Any] = {"arc_api_key": self.api_key}
+        kwargs: dict[str, Any] = {"arc_api_key": self.api_key}
         if self.base_url:
             kwargs["arc_base_url"] = self.base_url.rstrip("/")
 
         # Initialize Arcade interface
         self.arcade = arc_agi.Arcade(**kwargs)
-        self.env_map: Dict[str, Any] = {
+        self.env_map: dict[str, Any] = {
             env.game_id: env for env in self.arcade.available_environments
         }
 
-    def list_available_games(self) -> List[Dict[str, Any]]:
+    def list_available_games(self) -> list[dict[str, Any]]:
         """Returns summary of all 25 platform environments."""
         return [
             {
@@ -105,10 +103,10 @@ class PlatformBenchmarkSuite:
     def evaluate_game(
         self,
         game_id: str,
-        agent_factory: Optional[Callable[[str], Any]] = None,
+        agent_factory: Callable[[str], Any] | None = None,
         max_actions: int = 120,
         seed: int = 42,
-    ) -> Tuple[EnvironmentEvaluation, Dict[str, Any]]:
+    ) -> tuple[EnvironmentEvaluation, dict[str, Any]]:
         """
         Executes an agent on a single platform environment.
         Tracks levels completed, action counts, decision latencies, and legality.
@@ -117,7 +115,7 @@ class PlatformBenchmarkSuite:
         if not env_info:
             raise ValueError(f"Game '{game_id}' not found in available platform environments.")
 
-        baseline_actions: List[int] = env_info.baseline_actions or [50]
+        baseline_actions: list[int] = env_info.baseline_actions or [50]
         total_levels = len(baseline_actions)
 
         # Instantiate environment via Arcade
@@ -134,9 +132,9 @@ class PlatformBenchmarkSuite:
             agent = agent_factory(game_id)
 
         # Tracking state
-        actions_per_level: Dict[int, int] = {lvl: 0 for lvl in range(1, total_levels + 1)}
-        level_completed_flags: Dict[int, bool] = {lvl: 0 for lvl in range(1, total_levels + 1)}
-        latencies_ms: List[float] = []
+        actions_per_level: dict[int, int] = {lvl: 0 for lvl in range(1, total_levels + 1)}
+        level_completed_flags: dict[int, bool] = {lvl: False for lvl in range(1, total_levels + 1)}
+        latencies_ms: list[float] = []
         legal_actions_count = 0
         illegal_actions_count = 0
         total_actions = 0
@@ -172,10 +170,11 @@ class PlatformBenchmarkSuite:
 
             # Step environment
             payload = getattr(agent, "last_payload", None)
+            next_frame: FrameDataRaw | None
             if payload:
-                next_frame: Optional[FrameDataRaw] = env.step(action, data=payload)
+                next_frame = env.step(action, data=payload)
             else:
-                next_frame: Optional[FrameDataRaw] = env.step(action)
+                next_frame = env.step(action)
             if next_frame is None:
                 break
 
@@ -199,7 +198,7 @@ class PlatformBenchmarkSuite:
                 break
 
         # Build EnvironmentEvaluation metric object
-        level_metrics: List[LevelMetric] = []
+        level_metrics: list[LevelMetric] = []
         for lvl in range(1, total_levels + 1):
             h_bl = baseline_actions[lvl - 1] if lvl - 1 < len(baseline_actions) else 50
             completed = level_completed_flags.get(lvl, False)
@@ -258,11 +257,11 @@ class PlatformBenchmarkSuite:
     def evaluate_suite(
         self,
         split: str = "train",
-        games_subset: Optional[List[str]] = None,
+        games_subset: list[str] | None = None,
         max_actions: int = 100,
-        agent_factory: Optional[Callable[[str], Any]] = None,
+        agent_factory: Callable[[str], Any] | None = None,
         seed: int = 42,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Runs evaluation across the designated split or subset of platform games.
         Computes aggregate RHAE, bootstrap 95% LCB, and produces structured scorecard.
@@ -278,12 +277,14 @@ class PlatformBenchmarkSuite:
         else:
             raise ValueError(f"Unknown split '{split}'. Use 'train', 'holdout', or 'all'.")
 
-        print(f"\n{'='*75}")
-        print(f"OFFICIAL ARC-AGI PLATFORM BENCHMARK ({split.upper()} SUITE - {len(target_games)} GAMES)")
-        print(f"{'='*75}")
+        print(f"\n{'=' * 75}")
+        print(
+            f"OFFICIAL ARC-AGI PLATFORM BENCHMARK ({split.upper()} SUITE - {len(target_games)} GAMES)"
+        )
+        print(f"{'=' * 75}")
 
-        evaluations: List[EnvironmentEvaluation] = []
-        diagnostics_list: List[Dict[str, Any]] = []
+        evaluations: list[EnvironmentEvaluation] = []
+        diagnostics_list: list[dict[str, Any]] = []
 
         for idx, game_id in enumerate(target_games, 1):
             title = self.env_map.get(game_id, {}).title if game_id in self.env_map else game_id
@@ -299,14 +300,16 @@ class PlatformBenchmarkSuite:
                 diagnostics_list.append(diag)
                 print(
                     f"   Result: Score={diag['score']} (Levels: {diag['levels_completed']}/{diag['total_levels']}, "
-                    f"Actions: {diag['total_actions']}, Legality: {diag['legality_rate']*100:.1f}%)"
+                    f"Actions: {diag['total_actions']}, Legality: {diag['legality_rate'] * 100:.1f}%)"
                 )
             except Exception as e:
                 print(f"   ERROR running game {game_id}: {e}")
                 # Log failed game with 0 score
                 empty_eval = EnvironmentEvaluation(game_id=game_id, levels=[])
                 evaluations.append(empty_eval)
-                diagnostics_list.append({"game_id": game_id, "error": str(e), "score": 0.0, "levels_completed": 0})
+                diagnostics_list.append(
+                    {"game_id": game_id, "error": str(e), "score": 0.0, "levels_completed": 0}
+                )
 
         # Aggregate Statistics
         scores = [d["score"] for d in diagnostics_list if "score" in d]
@@ -317,7 +320,9 @@ class PlatformBenchmarkSuite:
         # Bootstrap 95% LCB
         if len(scores) >= 3:
             rng = np.random.default_rng(seed)
-            boot_means = [np.mean(rng.choice(scores, size=len(scores), replace=True)) for _ in range(1000)]
+            boot_means = [
+                np.mean(rng.choice(scores, size=len(scores), replace=True)) for _ in range(1000)
+            ]
             lcb_95 = float(np.percentile(boot_means, 5))
         else:
             lcb_95 = mean_score
@@ -340,17 +345,19 @@ class PlatformBenchmarkSuite:
         report_path = self._save_report(summary, split)
         summary["report_path"] = str(report_path)
 
-        print(f"\n{'='*75}")
-        print(f"SUITE COMPLETE:")
+        print(f"\n{'=' * 75}")
+        print("SUITE COMPLETE:")
         print(f"  - Mean RHAE Score:       {summary['mean_rhae_score']}")
         print(f"  - Bootstrap 95% LCB:     {summary['bootstrap_95_lcb']}")
-        print(f"  - Levels Completed:      {total_levels_comp}/{total_levels_avail} ({summary['overall_completion_rate']*100:.1f}%)")
+        print(
+            f"  - Levels Completed:      {total_levels_comp}/{total_levels_avail} ({summary['overall_completion_rate'] * 100:.1f}%)"
+        )
         print(f"  - Scorecard Saved At:    {report_path}")
-        print(f"{'='*75}\n")
+        print(f"{'=' * 75}\n")
 
         return summary
 
-    def _save_report(self, summary: Dict[str, Any], split: str) -> Path:
+    def _save_report(self, summary: dict[str, Any], split: str) -> Path:
         """Saves evaluation JSON and updates markdown leaderboard."""
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_file = self.reports_dir / f"platform_eval_{split}_{ts}.json"
@@ -379,11 +386,11 @@ class PlatformBenchmarkSuite:
     def evaluate_multi_budget(
         self,
         split: str = "holdout",
-        games_subset: Optional[List[str]] = None,
-        budgets: Optional[List[int]] = None,
-        agent_factory: Optional[Callable[[str], Any]] = None,
+        games_subset: list[str] | None = None,
+        budgets: list[int] | None = None,
+        agent_factory: Callable[[str], Any] | None = None,
         seed: int = 42,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Runs multi-budget evaluation across designated split (e.g. holdout)
         for multiple action budget limits (e.g. 50, 100, 200).
@@ -392,9 +399,11 @@ class PlatformBenchmarkSuite:
         if budgets is None:
             budgets = [50, 100, 200]
 
-        print(f"\n{'='*75}")
-        print(f"OFFICIAL ARC-AGI MULTI-BUDGET BENCHMARK ({split.upper()} SUITE - BUDGETS: {budgets})")
-        print(f"{'='*75}")
+        print(f"\n{'=' * 75}")
+        print(
+            f"OFFICIAL ARC-AGI MULTI-BUDGET BENCHMARK ({split.upper()} SUITE - BUDGETS: {budgets})"
+        )
+        print(f"{'=' * 75}")
 
         budget_results = {}
         for b in budgets:
@@ -409,7 +418,7 @@ class PlatformBenchmarkSuite:
             budget_results[str(b)] = summary
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        multi_summary = {
+        multi_summary: dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "split": split,
             "budgets": budgets,
@@ -444,12 +453,14 @@ class PlatformBenchmarkSuite:
                 )
             board_file.write_text(board_file.read_text(encoding="utf-8") + rows, encoding="utf-8")
 
-        print(f"\n{'='*75}")
-        print(f"MULTI-BUDGET EVALUATION COMPLETE:")
+        print(f"\n{'=' * 75}")
+        print("MULTI-BUDGET EVALUATION COMPLETE:")
         for b in budgets:
             c = multi_summary["budget_curve"][b]
-            print(f"  Budget {b:3d}: Mean RHAE={c['mean_rhae']} | 95% LCB={c['bootstrap_95_lcb']} | Levels={c['levels_completed']}/{c['total_levels']}")
+            print(
+                f"  Budget {b:3d}: Mean RHAE={c['mean_rhae']} | 95% LCB={c['bootstrap_95_lcb']} | Levels={c['levels_completed']}/{c['total_levels']}"
+            )
         print(f"  Multi-Budget Scorecard Saved At: {multi_report_file}")
-        print(f"{'='*75}\n")
+        print(f"{'=' * 75}\n")
 
         return multi_summary

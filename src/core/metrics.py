@@ -3,10 +3,8 @@ Evaluation metrics and diagnostics for Kaggle LLM Classification Finetuning.
 Includes exact Kaggle multi-class log loss, Brier score, ECE, and Position Symmetry divergence.
 """
 
-from typing import Dict, Tuple, Union
 import numpy as np
 import pandas as pd
-
 
 CLASSES = ["winner_model_a", "winner_model_b", "winner_tie"]
 EPSILON = 1e-15
@@ -32,18 +30,18 @@ def normalize_probabilities(preds: np.ndarray, eps: float = EPSILON) -> np.ndarr
 
 
 def compute_log_loss(
-    y_true: Union[np.ndarray, pd.DataFrame],
-    y_pred: Union[np.ndarray, pd.DataFrame],
+    y_true: np.ndarray | pd.DataFrame,
+    y_pred: np.ndarray | pd.DataFrame,
     eps: float = EPSILON,
 ) -> float:
     """
     Computes exact Kaggle multi-class log loss.
-    
+
     Args:
         y_true: Ground truth array of shape (N, 3) (one-hot or probabilities).
         y_pred: Predicted probabilities array of shape (N, 3).
         eps: Clipping threshold (default: 1e-15).
-        
+
     Returns:
         float: Multi-class log loss.
     """
@@ -61,8 +59,8 @@ def compute_log_loss(
 
 
 def compute_brier_score(
-    y_true: Union[np.ndarray, pd.DataFrame],
-    y_pred: Union[np.ndarray, pd.DataFrame],
+    y_true: np.ndarray | pd.DataFrame,
+    y_pred: np.ndarray | pd.DataFrame,
 ) -> float:
     """Computes multi-class Brier score (mean squared error of probabilities)."""
     if isinstance(y_true, pd.DataFrame):
@@ -86,11 +84,11 @@ def compute_expected_calibration_error(
     y_true_labels = np.argmax(y_true, axis=1)
     confidences = np.max(y_pred, axis=1)
     predictions = np.argmax(y_pred, axis=1)
-    accuracies = (predictions == y_true_labels)
+    accuracies = predictions == y_true_labels
 
     bin_boundaries = np.linspace(0, 1, n_bins + 1)
     ece = 0.0
-    total_samples = len(y_true)
+    len(y_true)
 
     for i in range(n_bins):
         bin_lower = bin_boundaries[i]
@@ -115,7 +113,7 @@ def compute_symmetry_divergence(
     When response A and B are swapped, the model's prediction for winner_model_a
     should match the original prediction for winner_model_b, and winner_tie
     should remain identical.
-    
+
     Returns:
         float: Mean absolute difference between expected symmetric probabilities.
     """
@@ -136,8 +134,8 @@ def compute_symmetry_divergence(
 def evaluate_predictions(
     y_true: np.ndarray,
     y_pred: np.ndarray,
-    preds_swapped: np.ndarray = None,
-) -> Dict[str, float]:
+    preds_swapped: np.ndarray | None = None,
+) -> dict[str, float]:
     """Computes a complete suite of evaluation metrics for validation reporting."""
     y_pred_norm = normalize_probabilities(y_pred)
     log_loss = compute_log_loss(y_true, y_pred_norm)

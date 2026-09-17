@@ -6,7 +6,6 @@ Verifies that:
 """
 
 import numpy as np
-import pytest
 from arcengine import GameAction, GameState
 
 from agent.my_agent import MyAgent
@@ -72,7 +71,7 @@ def test_agent_completes_delayed_key_door_puzzle():
     agent = MyAgent(game_id="keydoor_test")
 
     max_steps = 35
-    for step in range(1, max_steps + 1):
+    for _step in range(1, max_steps + 1):
         if agent.is_done(env.frame, env):
             break
         act = agent.choose_action(env.frame, env)

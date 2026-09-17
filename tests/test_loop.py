@@ -5,10 +5,10 @@ Unit tests for SelfDrivingResearchLoop: state persistence, fold-bagging, and res
 import numpy as np
 import pandas as pd
 import pytest
-from pathlib import Path
+
 from src.core.loop import SelfDrivingResearchLoop
-from src.models.length_prior import LengthPriorPredictor
 from src.features.extractor import FeatureExtractor
+from src.models.length_prior import LengthPriorPredictor
 
 
 @pytest.fixture
@@ -45,17 +45,19 @@ def test_ensemble_state_save_and_load(mock_loop):
 
 
 def test_predict_test_bagged_length_prior(mock_loop):
-    df_test = pd.DataFrame({
-        "id": [1, 2, 3],
-        "prompt": ["hello", "how are you", "write code"],
-        "response_a": ["short", "very very very very long text", "a"],
-        "response_b": ["longer text here", "short", "b"],
-    })
+    df_test = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "prompt": ["hello", "how are you", "write code"],
+            "response_a": ["short", "very very very very long text", "a"],
+            "response_b": ["longer text here", "short", "b"],
+        }
+    )
 
     # Create 3 fold models
     extractor = FeatureExtractor()
     X_test = extractor.extract_features(df_test)
-    X_test_swap = extractor.extract_swapped_features(df_test)
+    extractor.extract_swapped_features(df_test)
 
     m1 = LengthPriorPredictor(beta=1.5)
     m2 = LengthPriorPredictor(beta=1.6)

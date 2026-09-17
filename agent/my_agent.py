@@ -9,32 +9,33 @@ Integrates:
 """
 
 from __future__ import annotations
-import hashlib
-from typing import Any, Dict, List, Optional, Set, Tuple
-import numpy as np
 
-from arcengine import GameAction, GameState, FrameDataRaw
-from src.arc_core.contracts import Observation
+from typing import Any
+
+import numpy as np
+from arcengine import GameAction, GameState
+
 from src.arc_agent.legality_adapter import LegalityAdapter
-from src.arc_agent.perception.layered_perception import LayeredPerception, FrameAnalysis
-from src.arc_agent.perception.cognitive_hierarchy import (
-    CognitiveHierarchyPerception,
-    CognitiveHierarchyAnalysis,
-)
-from src.arc_agent.world_model.belief_state import BeliefStateWorldModel
-from src.arc_agent.planning.epistemic_policy import EpistemicPolicy
-from src.arc_agent.memory.scoped_memory import ScopedEpisodeMemory
 from src.arc_agent.memory.reasoning_state import (
-    PersistentReasoningState,
     ContextCompactor,
+    PersistentReasoningState,
 )
+from src.arc_agent.memory.scoped_memory import ScopedEpisodeMemory
+from src.arc_agent.perception.cognitive_hierarchy import (
+    CognitiveHierarchyAnalysis,
+    CognitiveHierarchyPerception,
+)
+from src.arc_agent.perception.layered_perception import FrameAnalysis, LayeredPerception
+from src.arc_agent.planning.epistemic_policy import EpistemicPolicy
+from src.arc_agent.world_model.belief_state import BeliefStateWorldModel
+from src.arc_core.contracts import Observation
 
 # When running in official starter, `Agent` is imported from `agents.agent`
 try:
     from agents.agent import Agent
 except ImportError:
     # Base fallback for local testing without the starter framework wrapper
-    class Agent:
+    class Agent:  # type: ignore[no-redef]
         def __init__(self, game_id: str = "local_game", *args: Any, **kwargs: Any):
             self.game_id = game_id
 
@@ -43,9 +44,16 @@ class MyAgent(Agent):
     """
     Production-ready Uncertainty-Aware Agent for ARC-AGI-3.
     """
+
     MAX_ACTIONS = 1000
 
-    def __init__(self, game_id: str = "default_game", parameters: Optional[Dict[str, Any]] = None, *args: Any, **kwargs: Any):
+    def __init__(
+        self,
+        game_id: str = "default_game",
+        parameters: dict[str, Any] | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ):
         super().__init__(*args, **kwargs)
         self.game_id = getattr(self, "game_id", game_id)
         self.parameters = parameters or {}
@@ -57,10 +65,10 @@ class MyAgent(Agent):
         self.reasoning_state = PersistentReasoningState(game_id=self.game_id)
         self.compactor = ContextCompactor()
 
-        self.previous_observation: Optional[Observation] = None
-        self.previous_analysis: Optional[FrameAnalysis] = None
-        self.previous_cognitive: Optional[CognitiveHierarchyAnalysis] = None
-        self.previous_action: Optional[str] = None
+        self.previous_observation: Observation | None = None
+        self.previous_analysis: FrameAnalysis | None = None
+        self.previous_cognitive: CognitiveHierarchyAnalysis | None = None
+        self.previous_action: str | None = None
         self.action_count = 0
 
     def is_done(self, frames: Any, latest_frame: Any) -> bool:
@@ -140,7 +148,10 @@ class MyAgent(Agent):
         if cognitive_analysis.player_color is not None:
             if self.reasoning_state.player_color is None or cognitive_analysis.is_stagnant:
                 self.reasoning_state.player_color = cognitive_analysis.player_color
-            elif cognitive_analysis.player_color != self.reasoning_state.player_color and prev_grid is not None:
+            elif (
+                cognitive_analysis.player_color != self.reasoning_state.player_color
+                and prev_grid is not None
+            ):
                 self.reasoning_state.player_color = cognitive_analysis.player_color
 
         # 2. Update Reasoning Persistence (Causal displacements & deaths)

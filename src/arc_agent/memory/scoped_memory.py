@@ -5,19 +5,21 @@ Invalidates facts upon prediction error, and records hashable transition event l
 for reproducible replay analysis and debugging.
 """
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any
+
 import numpy as np
 
 
 @dataclass(frozen=True)
 class TransitionEvent:
     """Hashable record of an environment transition and agent decision."""
+
     step: int
     level: int
     from_frame_hash: str
     action: str
-    payload: Dict[str, Any]
+    payload: dict[str, Any]
     to_state: str
     to_frame_hash: str
     planning_mode: str
@@ -34,9 +36,9 @@ class ScopedEpisodeMemory:
         self.run_id = run_id
 
         # Invariants carried across levels of the same game run
-        self.confirmed_invariants: Dict[str, Any] = {}
-        self.events: List[TransitionEvent] = []
-        self.forbidden_transitions: set[Tuple[str, str]] = set()
+        self.confirmed_invariants: dict[str, Any] = {}
+        self.events: list[TransitionEvent] = []
+        self.forbidden_transitions: set[tuple[str, str]] = set()
 
     def reset_for_new_game(self, game_key: str, version: str = "1.0", run_id: str = "0"):
         """Completely resets all memories when switching to a novel environment."""
@@ -53,7 +55,7 @@ class ScopedEpisodeMemory:
         level: int,
         from_frame: np.ndarray,
         action: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         to_state: str,
         to_frame: np.ndarray,
         planning_mode: str,

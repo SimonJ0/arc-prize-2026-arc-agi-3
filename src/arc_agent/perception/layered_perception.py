@@ -8,7 +8,7 @@ Avoids fragile single-background assumptions. Computes:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+
 import numpy as np
 from scipy.ndimage import label
 
@@ -16,11 +16,12 @@ from scipy.ndimage import label
 @dataclass(frozen=True)
 class EntityCandidate:
     """An identified object or cluster within the grid."""
+
     entity_id: int
     color: int
-    cells: Tuple[Tuple[int, int], ...]
-    bbox: Tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
-    centroid: Tuple[float, float]
+    cells: tuple[tuple[int, int], ...]
+    bbox: tuple[int, int, int, int]  # (min_y, min_x, max_y, max_x)
+    centroid: tuple[float, float]
     is_dynamic: bool = False
 
     @property
@@ -31,21 +32,22 @@ class EntityCandidate:
 @dataclass
 class FrameAnalysis:
     """Multi-hypothesis perception result for a single observation."""
-    frame_shape: Tuple[int, int]
-    present_colors: Set[int]
-    background_hypotheses: List[Tuple[int, float]]  # (color, confidence)
-    entities: List[EntityCandidate]
-    dynamic_diff_mask: Optional[np.ndarray] = None
-    symmetry_scores: Dict[str, float] = field(default_factory=dict)
+
+    frame_shape: tuple[int, int]
+    present_colors: set[int]
+    background_hypotheses: list[tuple[int, float]]  # (color, confidence)
+    entities: list[EntityCandidate]
+    dynamic_diff_mask: np.ndarray | None = None
+    symmetry_scores: dict[str, float] = field(default_factory=dict)
 
 
 class LayeredPerception:
     """Perception pipeline maintaining multiple structural segmentations."""
 
     def __init__(self):
-        self.previous_frame: Optional[np.ndarray] = None
+        self.previous_frame: np.ndarray | None = None
 
-    def analyze(self, frame: np.ndarray, prev_frame: Optional[np.ndarray] = None) -> FrameAnalysis:
+    def analyze(self, frame: np.ndarray, prev_frame: np.ndarray | None = None) -> FrameAnalysis:
         """
         Processes a 2D integer grid frame into layered perceptual abstractions.
         """
@@ -64,7 +66,7 @@ class LayeredPerception:
             prev_frame = self.previous_frame
         dynamic_mask = None
         if prev_frame is not None and prev_frame.shape == frame.shape:
-            dynamic_mask = (frame != prev_frame)
+            dynamic_mask = frame != prev_frame
 
         # 3. Extract entities across candidate non-background components
         primary_bg = bg_hypotheses[0][0] if bg_hypotheses else 0
@@ -89,20 +91,18 @@ class LayeredPerception:
 
     def _infer_background_candidates(
         self, frame: np.ndarray, unique_colors: np.ndarray, counts: np.ndarray
-    ) -> List[Tuple[int, float]]:
+    ) -> list[tuple[int, float]]:
         """
         Ranks candidate background colors using combined border density,
         overall area fraction, and connectivity.
         """
         H, W = frame.shape
         total_pixels = H * W
-        border_pixels = np.concatenate([
-            frame[0, :], frame[-1, :], frame[:, 0], frame[:, -1]
-        ])
-        border_total = len(border_pixels)
+        border_pixels = np.concatenate([frame[0, :], frame[-1, :], frame[:, 0], frame[:, -1]])
+        len(border_pixels)
 
         candidates = []
-        for color, count in zip(unique_colors, counts):
+        for color, count in zip(unique_colors, counts, strict=False):
             color = int(color)
             area_frac = count / total_pixels
             border_frac = np.mean(border_pixels == color)
@@ -114,8 +114,8 @@ class LayeredPerception:
         return candidates
 
     def _extract_entities(
-        self, frame: np.ndarray, background_color: int, dynamic_mask: Optional[np.ndarray]
-    ) -> List[EntityCandidate]:
+        self, frame: np.ndarray, background_color: int, dynamic_mask: np.ndarray | None
+    ) -> list[EntityCandidate]:
         """Extracts connected component entities excluding the primary candidate background."""
         entities = []
         entity_id_counter = 0
@@ -125,7 +125,7 @@ class LayeredPerception:
             if color == background_color:
                 continue
 
-            color_mask = (frame == color)
+            color_mask = frame == color
             labeled_array, num_features = label(color_mask)
 
             for feat_idx in range(1, num_features + 1):
@@ -142,14 +142,16 @@ class LayeredPerception:
                 if dynamic_mask is not None:
                     is_dyn = bool(np.any(dynamic_mask[labeled_array == feat_idx]))
 
-                entities.append(EntityCandidate(
-                    entity_id=entity_id_counter,
-                    color=color,
-                    cells=cells,
-                    bbox=(int(min_y), int(min_x), int(max_y), int(max_x)),
-                    centroid=centroid,
-                    is_dynamic=is_dyn,
-                ))
+                entities.append(
+                    EntityCandidate(
+                        entity_id=entity_id_counter,
+                        color=color,
+                        cells=cells,
+                        bbox=(int(min_y), int(min_x), int(max_y), int(max_x)),
+                        centroid=centroid,
+                        is_dynamic=is_dyn,
+                    )
+                )
                 entity_id_counter += 1
 
         return entities

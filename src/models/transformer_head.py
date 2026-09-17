@@ -5,10 +5,9 @@ for fine-tuning models like DeBERTa-v3 or Gemma/Llama reward models.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
+
 import numpy as np
-import pandas as pd
 
 
 @dataclass
@@ -25,7 +24,9 @@ class TransformerModelConfig:
     gradient_accumulation_steps: int = 2
 
 
-def format_cross_encoder_text(prompt: str, resp_a: str, resp_b: str, max_chars_per_resp: int = 1500) -> str:
+def format_cross_encoder_text(
+    prompt: str, resp_a: str, resp_b: str, max_chars_per_resp: int = 1500
+) -> str:
     """
     Formats the pair into a structured cross-encoder prompt sequence.
     Truncates overly long responses cleanly to stay within token budgets.
@@ -36,7 +37,9 @@ def format_cross_encoder_text(prompt: str, resp_a: str, resp_b: str, max_chars_p
     return f"Prompt:\n{clean_p}\n\n[Response A]:\n{clean_a}\n\n[Response B]:\n{clean_b}"
 
 
-def format_swapped_cross_encoder_text(prompt: str, resp_a: str, resp_b: str, max_chars_per_resp: int = 1500) -> str:
+def format_swapped_cross_encoder_text(
+    prompt: str, resp_a: str, resp_b: str, max_chars_per_resp: int = 1500
+) -> str:
     """Formats the pair with positions inverted for symmetric cross-entropy loss."""
     return format_cross_encoder_text(prompt, resp_b, resp_a, max_chars_per_resp=max_chars_per_resp)
 
@@ -65,10 +68,12 @@ class TransformerPipelineSpec:
     Handles tokenization format, pair symmetry training loss, script generation, and inference.
     """
 
-    def __init__(self, config: Optional[TransformerModelConfig] = None):
+    def __init__(self, config: TransformerModelConfig | None = None):
         self.config = config or TransformerModelConfig()
 
-    def generate_kaggle_finetune_script(self, output_path: str = "submissions/kaggle_deberta_finetuning.py") -> Path:
+    def generate_kaggle_finetune_script(
+        self, output_path: str = "submissions/kaggle_deberta_finetuning.py"
+    ) -> Path:
         """
         Generates a standalone PyTorch / HuggingFace script tailored to Kaggle's T4/P100 GPUs,
         utilizing mixed precision (fp16), evaluation on multi-class log loss, and symmetric pair loss.

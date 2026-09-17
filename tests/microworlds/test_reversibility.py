@@ -7,7 +7,6 @@ Verifies that:
 """
 
 import numpy as np
-import pytest
 from arcengine import GameAction, GameState
 
 from agent.my_agent import MyAgent
@@ -37,8 +36,8 @@ class ReversibleTrapEnv:
     def frame(self):
         grid = np.zeros((self.grid_size, self.grid_size), dtype=int)
         grid[self.avatar_pos[0], self.avatar_pos[1]] = 2  # Avatar
-        grid[self.trap_pos[0], self.trap_pos[1]] = 4      # Trap = red
-        grid[self.goal_pos[0], self.goal_pos[1]] = 3      # Goal = green
+        grid[self.trap_pos[0], self.trap_pos[1]] = 4  # Trap = red
+        grid[self.goal_pos[0], self.goal_pos[1]] = 3  # Goal = green
         return [grid]
 
     def step(self, action: GameAction):

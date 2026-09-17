@@ -2,10 +2,9 @@
 Unit tests for submission generation and kernel validation.
 """
 
-from pathlib import Path
 import numpy as np
 import pandas as pd
-import pytest
+
 from src.submit.generator import SubmissionGenerator
 
 
@@ -44,7 +43,11 @@ def test_generate_dynamic_kernel_with_weights(tmp_path):
     assert kernel_file.exists()
     content = kernel_file.read_text(encoding="utf-8")
     assert "MODEL_BLOB_LZMA" in content
-    import base64, lzma, pickle, re
+    import base64
+    import lzma
+    import pickle
+    import re
+
     match = re.search(r"MODEL_BLOB_LZMA = ['\"]([^'\"]+)['\"]", content)
     assert match is not None
     pkg = pickle.loads(lzma.decompress(base64.b64decode(match.group(1))))

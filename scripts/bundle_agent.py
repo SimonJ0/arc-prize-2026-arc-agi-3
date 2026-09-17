@@ -6,13 +6,13 @@ Verifies clean-room offline execution before any Kaggle submission notebook is b
 """
 
 from __future__ import annotations
+
 import argparse
 import hashlib
-from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Dict, List
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -52,36 +52,34 @@ def strip_internal_imports(code: str) -> str:
     return "\n".join(filtered)
 
 
-
-
 def generate_bundle() -> str:
     """Generates the single-file, self-contained bundled agent source."""
     header = [
         '"""',
-        'AUTONOMOUS ARC-AGI-3 UNCERTAINTY-AWARE AGENT (INLINED DEPLOYMENT BUNDLE)',
-        'Self-contained, offline-compatible implementation for Kaggle code competition.',
+        "AUTONOMOUS ARC-AGI-3 UNCERTAINTY-AWARE AGENT (INLINED DEPLOYMENT BUNDLE)",
+        "Self-contained, offline-compatible implementation for Kaggle code competition.",
         '"""',
-        'from __future__ import annotations',
-        'import os',
-        'import sys',
-        'import time',
-        'import json',
-        'import random',
-        'import hashlib',
-        'from collections import deque',
-        'from dataclasses import dataclass, field',
-        'from typing import Any, Callable, Dict, List, Optional, Set, Tuple',
-        'import numpy as np',
-        'from scipy.ndimage import label',
-        'from arcengine import GameAction, GameState, FrameDataRaw',
-        '',
-        'try:',
-        '    from agents.agent import Agent',
-        'except ImportError:',
-        '    class Agent:',
+        "from __future__ import annotations",
+        "import os",
+        "import sys",
+        "import time",
+        "import json",
+        "import random",
+        "import hashlib",
+        "from collections import deque",
+        "from dataclasses import dataclass, field",
+        "from typing import Any, Callable, Dict, List, Optional, Set, Tuple",
+        "import numpy as np",
+        "from scipy.ndimage import label",
+        "from arcengine import GameAction, GameState, FrameDataRaw",
+        "",
+        "try:",
+        "    from agents.agent import Agent",
+        "except ImportError:",
+        "    class Agent:",
         '        def __init__(self, game_id: str = "default_game", *args: Any, **kwargs: Any):',
-        '            self.game_id = game_id',
-        '',
+        "            self.game_id = game_id",
+        "",
     ]
 
     bundle_parts = ["\n".join(header)]
@@ -91,13 +89,13 @@ def generate_bundle() -> str:
             raise FileNotFoundError(f"Missing required component to inline: {mod_path}")
         raw_code = mod_path.read_text(encoding="utf-8")
         clean_code = strip_internal_imports(raw_code)
-        bundle_parts.append(f"\n# {'='*70}\n# INLINED: {mod_path.name}\n# {'='*70}\n")
+        bundle_parts.append(f"\n# {'=' * 70}\n# INLINED: {mod_path.name}\n# {'=' * 70}\n")
         bundle_parts.append(clean_code)
 
     # Append MyAgent class
     raw_agent = MY_AGENT_PATH.read_text(encoding="utf-8")
     clean_agent = strip_internal_imports(raw_agent)
-    bundle_parts.append(f"\n# {'='*70}\n# PRIMARY AGENT: my_agent.py\n# {'='*70}\n")
+    bundle_parts.append(f"\n# {'=' * 70}\n# PRIMARY AGENT: my_agent.py\n# {'=' * 70}\n")
     bundle_parts.append(clean_agent)
 
     return "\n".join(bundle_parts)
@@ -168,12 +166,15 @@ print("CLEANROOM_OFFLINE_VERIFICATION_PASSED")
     return "CLEANROOM_OFFLINE_VERIFICATION_PASSED" in proc.stdout
 
 
-
 def main():
     parser = argparse.ArgumentParser(description="ARC-AGI-3 Agent Bundler & Offline Verifier")
-    parser.add_argument("--output", default=str(OUTPUT_BUNDLED_PATH), help="Target bundled file path")
+    parser.add_argument(
+        "--output", default=str(OUTPUT_BUNDLED_PATH), help="Target bundled file path"
+    )
     parser.add_argument("--verify-offline", action="store_true", help="Run clean-room offline test")
-    parser.add_argument("--replace-agent", action="store_true", help="Replace agent/my_agent.py with bundled code")
+    parser.add_argument(
+        "--replace-agent", action="store_true", help="Replace agent/my_agent.py with bundled code"
+    )
 
     args = parser.parse_args()
 
@@ -187,7 +188,9 @@ def main():
         success = verify_offline_cleanroom(bundled_code)
         if not success:
             sys.exit(1)
-        print("PASS: Clean-room offline verification succeeded. Zero network dependencies, zero missing imports.")
+        print(
+            "PASS: Clean-room offline verification succeeded. Zero network dependencies, zero missing imports."
+        )
 
     out_path = Path(args.output)
     out_path.write_text(bundled_code, encoding="utf-8")

@@ -7,7 +7,9 @@ Ensures zero 400 Bad Request errors by strictly enforcing:
 4. Non-ACTION6 actions strip all coordinates.
 """
 
-from typing import Any, Dict, Optional, Set, Tuple
+from collections.abc import Collection
+from typing import Any
+
 from arcengine import GameAction, GameState
 
 
@@ -29,14 +31,14 @@ class LegalityAdapter:
     def validate_action(
         cls,
         state: str,
-        available_actions: Set[str],
+        available_actions: Collection[str],
         proposed_action: str,
-        proposed_payload: Optional[Dict[str, Any]] = None,
+        proposed_payload: dict[str, Any] | None = None,
         default_fallback: str = "RESET",
-    ) -> Tuple[str, Dict[str, Any]]:
+    ) -> tuple[str, dict[str, Any]]:
         """
         Validates and sanitizes proposed action against current environment state.
-        
+
         Returns:
             Tuple of (sanitized_action_str, sanitized_payload_dict)
         """
@@ -97,4 +99,3 @@ class LegalityAdapter:
             return GameAction.from_name(key)
         except Exception:
             return GameAction.RESET
-

@@ -5,7 +5,8 @@ and excessive cross-fold variance to protect against catastrophic log loss degra
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import Any
+
 import numpy as np
 
 
@@ -14,7 +15,7 @@ class GateResult:
     passed: bool
     gate_name: str
     message: str
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 class AnomalyGuardrail:
@@ -34,7 +35,7 @@ class AnomalyGuardrail:
         self.max_probability_bound = max_probability_bound
         self.min_mean_entropy = min_mean_entropy
 
-    def check_fold_stability(self, fold_losses: List[float]) -> GateResult:
+    def check_fold_stability(self, fold_losses: list[float]) -> GateResult:
         """Flags high variance between CV fold losses."""
         if not fold_losses or len(fold_losses) < 2:
             return GateResult(
@@ -52,7 +53,11 @@ class AnomalyGuardrail:
                 passed=False,
                 gate_name="Fold Stability Guardrail",
                 message=f"ANOMALY: High fold variance detected! std={fold_std:.4f} > {self.max_fold_std:.4f}",
-                details={"fold_std": fold_std, "fold_range": fold_range, "fold_losses": fold_losses},
+                details={
+                    "fold_std": fold_std,
+                    "fold_range": fold_range,
+                    "fold_losses": fold_losses,
+                },
             )
 
         return GateResult(
@@ -72,7 +77,7 @@ class AnomalyGuardrail:
         min_p = float(np.min(oof_preds))
         max_p = float(np.max(oof_preds))
 
-        if mean_p_collapse := (mean_entropy < self.min_mean_entropy):
+        if mean_entropy < self.min_mean_entropy:
             return GateResult(
                 passed=False,
                 gate_name="Entropy Guardrail",
@@ -95,7 +100,7 @@ class AnomalyGuardrail:
             details={"mean_entropy": mean_entropy, "min_p": min_p, "max_p": max_p},
         )
 
-    def check_all(self, oof_preds: np.ndarray, fold_losses: List[float]) -> GateResult:
+    def check_all(self, oof_preds: np.ndarray, fold_losses: list[float]) -> GateResult:
         """Runs all anomaly guardrail checks."""
         stab_res = self.check_fold_stability(fold_losses)
         if not stab_res.passed:
@@ -109,5 +114,8 @@ class AnomalyGuardrail:
             passed=True,
             gate_name="Anomaly Guardrail",
             message="All validation anomaly guardrails verified clean.",
-            details={"fold_std": stab_res.details.get("fold_std", 0.0), "entropy": ent_res.details.get("mean_entropy", 0.0)},
+            details={
+                "fold_std": stab_res.details.get("fold_std", 0.0),
+                "entropy": ent_res.details.get("mean_entropy", 0.0),
+            },
         )

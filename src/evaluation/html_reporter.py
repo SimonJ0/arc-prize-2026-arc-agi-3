@@ -5,8 +5,7 @@ Produces self-contained, interactive HTML dashboards modeled after Tom's BirdCLE
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
@@ -225,8 +224,8 @@ class HtmlReportGenerator:
         exp_id: str,
         model_name: str,
         hypothesis: str,
-        diagnostics: Dict[str, Any],
-        delta: Optional[float] = None,
+        diagnostics: dict[str, Any],
+        delta: float | None = None,
         symmetry_div: float = 0.0,
         gate_passed: bool = True,
     ) -> Path:

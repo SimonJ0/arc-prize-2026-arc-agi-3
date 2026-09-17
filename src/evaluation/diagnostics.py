@@ -3,16 +3,16 @@ Deep Diagnostic Engine for LLM Preference Evaluation.
 Analyzes verbosity bias, calibration curves, confusion matrices, and fold breakdowns.
 """
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
+
 import numpy as np
 import pandas as pd
 from sklearn.metrics import confusion_matrix
 
 from src.core.metrics import (
-    CLASSES,
-    compute_log_loss,
     compute_brier_score,
     compute_expected_calibration_error,
+    compute_log_loss,
     normalize_probabilities,
 )
 
@@ -21,7 +21,7 @@ class DiagnosticEngine:
     """Computes comprehensive diagnostic metrics for an experiment."""
 
     @staticmethod
-    def compute_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
+    def compute_confusion_matrix(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, Any]:
         """Computes 3x3 confusion matrix and normalized percentages."""
         y_true_labels = np.argmax(y_true, axis=1)
         y_pred_labels = np.argmax(y_pred, axis=1)
@@ -39,13 +39,13 @@ class DiagnosticEngine:
         y_true: np.ndarray,
         y_pred: np.ndarray,
         n_bins: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Analyzes win rates as a function of length difference (len_a - len_b).
         Crucial for detecting if model captures genuine quality vs blind verbosity bias.
         """
         char_diff = (df["response_a"].str.len() - df["response_b"].str.len()).values
-        
+
         # Bin boundaries
         bins = np.quantile(char_diff, np.linspace(0, 1, n_bins + 1))
         # Ensure unique bin edges
@@ -76,16 +76,18 @@ class DiagnosticEngine:
             pred_b_win = float(np.mean(sub_pred[:, 1]))
             pred_tie = float(np.mean(sub_pred[:, 2]))
 
-            curve.append({
-                "bin_range": f"[{int(low):+d}, {int(high):+d}]",
-                "sample_count": count,
-                "actual_win_a": round(actual_a_win, 3),
-                "pred_win_a": round(pred_a_win, 3),
-                "actual_win_b": round(actual_b_win, 3),
-                "pred_win_b": round(pred_b_win, 3),
-                "actual_tie": round(actual_tie, 3),
-                "pred_tie": round(pred_tie, 3),
-            })
+            curve.append(
+                {
+                    "bin_range": f"[{int(low):+d}, {int(high):+d}]",
+                    "sample_count": count,
+                    "actual_win_a": round(actual_a_win, 3),
+                    "pred_win_a": round(pred_a_win, 3),
+                    "actual_win_b": round(actual_b_win, 3),
+                    "pred_win_b": round(pred_b_win, 3),
+                    "actual_tie": round(actual_tie, 3),
+                    "pred_tie": round(pred_tie, 3),
+                }
+            )
 
         return curve
 
@@ -94,27 +96,31 @@ class DiagnosticEngine:
         y_true: np.ndarray,
         y_pred: np.ndarray,
         n_bins: int = 10,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Computes reliability diagram points (confidence vs observed frequency)."""
         confidences = np.max(y_pred, axis=1)
-        accuracies = (np.argmax(y_pred, axis=1) == np.argmax(y_true, axis=1))
+        accuracies = np.argmax(y_pred, axis=1) == np.argmax(y_true, axis=1)
 
         bin_edges = np.linspace(0.3, 1.0, n_bins + 1)
         points = []
 
         for i in range(n_bins):
             low, high = bin_edges[i], bin_edges[i + 1]
-            mask = (confidences >= low) & (confidences < high if i < n_bins - 1 else confidences <= high)
+            mask = (confidences >= low) & (
+                confidences < high if i < n_bins - 1 else confidences <= high
+            )
             count = int(np.sum(mask))
             if count > 0:
                 mean_conf = float(np.mean(confidences[mask]))
                 mean_acc = float(np.mean(accuracies[mask]))
-                points.append({
-                    "bin": f"{low:.2f}-{high:.2f}",
-                    "mean_confidence": round(mean_conf, 3),
-                    "empirical_accuracy": round(mean_acc, 3),
-                    "count": count,
-                })
+                points.append(
+                    {
+                        "bin": f"{low:.2f}-{high:.2f}",
+                        "mean_confidence": round(mean_conf, 3),
+                        "empirical_accuracy": round(mean_acc, 3),
+                        "count": count,
+                    }
+                )
 
         return points
 
@@ -123,9 +129,9 @@ class DiagnosticEngine:
         df: pd.DataFrame,
         y_true: np.ndarray,
         y_pred: np.ndarray,
-        fold_scores: Optional[List[float]] = None,
-        feature_importances: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, Any]:
+        fold_scores: list[float] | None = None,
+        feature_importances: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
         """Runs full diagnostic suite and returns serializable report dictionary."""
         y_pred_norm = normalize_probabilities(y_pred)
         overall_loss = compute_log_loss(y_true, y_pred_norm)

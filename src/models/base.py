@@ -4,7 +4,8 @@ Provides standardized interface and built-in Test-Time Augmentation (TTA) symmet
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
+
 import numpy as np
 
 from src.core.metrics import normalize_probabilities
@@ -31,11 +32,11 @@ class BasePreferencePredictor(ABC):
         self,
         X_normal: Any,
         X_swapped: Any,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Executes Test-Time Augmentation (TTA) by evaluating both original
         and response-swapped pairs, then enforcing exact mathematical position symmetry:
-        
+
             P_sym(win_a)   = 0.5 * (P_norm(win_a) + P_swap(win_b))
             P_sym(win_b)   = 0.5 * (P_norm(win_b) + P_swap(win_a))
             P_sym(win_tie) = 0.5 * (P_norm(win_tie) + P_swap(win_tie))

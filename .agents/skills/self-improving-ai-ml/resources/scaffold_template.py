@@ -9,26 +9,28 @@ A production-grade, statistically rigorous scaffold implementing:
 5. Cryptographically bound Iron Rule authorization (SHA-256 verification)
 """
 
+import hashlib
+import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import hashlib
-import json
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
+
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from sklearn.model_selection import KFold
 
-
 # ==============================================================================
 # 1. TASK SPECIFICATION & DEFENSIVE PROBABILITY UTILITIES
 # ==============================================================================
 
+
 @dataclass(frozen=True)
 class TaskSpec:
     """Formal specification of an AI/ML task to prevent cross-domain semantic errors."""
+
     task_type: Literal[
         "binary_classification",
         "multiclass_classification",
@@ -40,13 +42,13 @@ class TaskSpec:
     primary_metric: str
     minimize: bool
     probability_semantics: Literal[
-        "simplex",               # sum(p) == 1 (multiclass softmax)
-        "independent_bernoulli", # p in [0, 1] per class (multilabel sigmoid)
-        "continuous",            # unbounded real values (regression)
-        "ranking_score",         # real-valued sorting scores
+        "simplex",  # sum(p) == 1 (multiclass softmax)
+        "independent_bernoulli",  # p in [0, 1] per class (multilabel sigmoid)
+        "continuous",  # unbounded real values (regression)
+        "ranking_score",  # real-valued sorting scores
     ]
-    group_key: Optional[str] = None
-    time_key: Optional[str] = None
+    group_key: str | None = None
+    time_key: str | None = None
     supports_calibration: bool = True
     supports_tta: bool = False
 
@@ -134,13 +136,14 @@ def compute_ece(y_true: np.ndarray, y_pred: np.ndarray, n_bins: int = 10) -> flo
 # 2. BASE PREDICTOR INTERFACE
 # ==============================================================================
 
+
 class BasePredictor(ABC):
     """Abstract model predictor interface enforcing Test-Time Augmentation (TTA)."""
 
-    def __init__(self, name: str, params: Optional[Dict[str, Any]] = None):
+    def __init__(self, name: str, params: dict[str, Any] | None = None):
         self.name = name
         self.params = params or {}
-        self.feature_importances: Dict[str, float] = {}
+        self.feature_importances: dict[str, float] = {}
 
     @abstractmethod
     def fit(self, X: pd.DataFrame, y: np.ndarray) -> "BasePredictor":
@@ -151,8 +154,8 @@ class BasePredictor(ABC):
     def predict_proba_with_tta(
         self,
         X_norm: pd.DataFrame,
-        X_aug: Optional[pd.DataFrame] = None,
-    ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
+        X_aug: pd.DataFrame | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
         """
         Executes inference with domain symmetry TTA.
         Returns: (p_symmetric, p_normal, p_augmented)
@@ -164,12 +167,13 @@ class BasePredictor(ABC):
 # 3. VALIDATION GATES & ANOMALY GUARDRAILS
 # ==============================================================================
 
+
 @dataclass
 class GateResult:
     passed: bool
     gate_name: str
     message: str
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 def safe_correlation(a: np.ndarray, b: np.ndarray) -> float:
@@ -212,42 +216,70 @@ class ValidationGatekeeper:
         self.min_entropy = min_entropy
         self.max_overfitting_gap = max_overfitting_gap
 
-    def check_leakage(self, train_ids: np.ndarray, val_ids: np.ndarray, preds: np.ndarray) -> GateResult:
+    def check_leakage(
+        self, train_ids: np.ndarray, val_ids: np.ndarray, preds: np.ndarray
+    ) -> GateResult:
         overlap = set(train_ids).intersection(set(val_ids))
         if overlap:
-            return GateResult(False, "Leakage Gate", f"CRITICAL: Found {len(overlap)} overlapping IDs between train and val!")
+            return GateResult(
+                False,
+                "Leakage Gate",
+                f"CRITICAL: Found {len(overlap)} overlapping IDs between train and val!",
+            )
         if np.isnan(preds).any() or np.isinf(preds).any():
-            return GateResult(False, "Leakage Gate", "CRITICAL: Non-finite values (NaN/Inf) detected in predictions!")
+            return GateResult(
+                False,
+                "Leakage Gate",
+                "CRITICAL: Non-finite values (NaN/Inf) detected in predictions!",
+            )
         return GateResult(True, "Leakage Gate", "Zero leakage and numerical integrity verified.")
 
     def check_cv_improvement(
         self,
         candidate_loss: float,
-        best_loss: Optional[float],
+        best_loss: float | None,
         allow_slight_regression_for_diversity: bool = False,
     ) -> GateResult:
         if best_loss is None:
-            return GateResult(True, "CV Gate", f"Initial baseline established ({candidate_loss:.5f}).")
+            return GateResult(
+                True, "CV Gate", f"Initial baseline established ({candidate_loss:.5f})."
+            )
         delta = candidate_loss - best_loss
         if delta <= -self.min_loss_improvement:
-            return GateResult(True, "CV Gate", f"CV improved by {-delta:.5f} ({best_loss:.5f} -> {candidate_loss:.5f})")
+            return GateResult(
+                True,
+                "CV Gate",
+                f"CV improved by {-delta:.5f} ({best_loss:.5f} -> {candidate_loss:.5f})",
+            )
         if allow_slight_regression_for_diversity and delta <= 0.005:
-            return GateResult(True, "CV Gate", f"Accepted for ensemble pool (diversity candidate within +{delta:.5f}).")
-        return GateResult(False, "CV Gate", f"CV REJECTED: Candidate {candidate_loss:.5f} did not beat best {best_loss:.5f} (delta: +{delta:.5f}).")
+            return GateResult(
+                True,
+                "CV Gate",
+                f"Accepted for ensemble pool (diversity candidate within +{delta:.5f}).",
+            )
+        return GateResult(
+            False,
+            "CV Gate",
+            f"CV REJECTED: Candidate {candidate_loss:.5f} did not beat best {best_loss:.5f} (delta: +{delta:.5f}).",
+        )
 
-    def check_symmetry(self, p_norm: np.ndarray, p_swap: Optional[np.ndarray]) -> GateResult:
+    def check_symmetry(self, p_norm: np.ndarray, p_swap: np.ndarray | None) -> GateResult:
         """
         Computes Total Variation distance: D_TV(p, q) = 0.5 * mean(sum(|p - q|, axis=1)).
         Guaranteed to lie in [0, 1].
         """
         if p_swap is None:
-            return GateResult(True, "Symmetry Gate", "Symmetry check skipped (no augmented inputs).")
+            return GateResult(
+                True, "Symmetry Gate", "Symmetry check skipped (no augmented inputs)."
+            )
 
         p_norm_n = normalize_probabilities(p_norm)
         p_swap_n = normalize_probabilities(p_swap)
 
         if p_norm_n.shape != p_swap_n.shape:
-            return GateResult(False, "Symmetry Gate", f"Shape mismatch: {p_norm_n.shape} != {p_swap_n.shape}")
+            return GateResult(
+                False, "Symmetry Gate", f"Shape mismatch: {p_norm_n.shape} != {p_swap_n.shape}"
+            )
 
         div_tv = float(0.5 * np.mean(np.sum(np.abs(p_norm_n - p_swap_n), axis=1)))
         passed = div_tv <= self.max_symmetry_divergence
@@ -258,9 +290,11 @@ class ValidationGatekeeper:
             details={"div_tv": div_tv, "threshold": self.max_symmetry_divergence},
         )
 
-    def check_diversity(self, candidate_oof: np.ndarray, pool_oofs: List[np.ndarray]) -> GateResult:
+    def check_diversity(self, candidate_oof: np.ndarray, pool_oofs: list[np.ndarray]) -> GateResult:
         if not pool_oofs:
-            return GateResult(True, "Diversity Gate", "First model in ensemble pool - diversity check satisfied.")
+            return GateResult(
+                True, "Diversity Gate", "First model in ensemble pool - diversity check satisfied."
+            )
 
         max_r = max(safe_correlation(candidate_oof, p) for p in pool_oofs)
         passed = max_r <= self.max_ensemble_correlation
@@ -274,25 +308,37 @@ class ValidationGatekeeper:
     def check_anomalies(
         self,
         oof_preds: np.ndarray,
-        fold_losses: List[float],
-        train_loss: Optional[float] = None,
-        val_loss: Optional[float] = None,
+        fold_losses: list[float],
+        train_loss: float | None = None,
+        val_loss: float | None = None,
     ) -> GateResult:
         # 1. Fold variance guard
         if len(fold_losses) >= 2 and (std := float(np.std(fold_losses))) > self.max_fold_std:
-            return GateResult(False, "Anomaly Guardrail", f"High cross-fold variance: std={std:.4f} > {self.max_fold_std:.4f}")
+            return GateResult(
+                False,
+                "Anomaly Guardrail",
+                f"High cross-fold variance: std={std:.4f} > {self.max_fold_std:.4f}",
+            )
 
         # 2. Shannon entropy collapse guard
         clipped = np.clip(oof_preds, 1e-15, 1.0 - 1e-15)
         mean_entropy = float(np.mean(-np.sum(clipped * np.log(clipped), axis=-1)))
         if mean_entropy < self.min_entropy:
-            return GateResult(False, "Anomaly Guardrail", f"Entropy collapse detected: mean H={mean_entropy:.4f} < {self.min_entropy:.4f}")
+            return GateResult(
+                False,
+                "Anomaly Guardrail",
+                f"Entropy collapse detected: mean H={mean_entropy:.4f} < {self.min_entropy:.4f}",
+            )
 
         # 3. Overfitting gap guard
         if train_loss is not None and val_loss is not None:
             gap = val_loss - train_loss
             if gap > self.max_overfitting_gap:
-                return GateResult(False, "Anomaly Guardrail", f"Severe overfitting detected: gap {gap:.4f} > {self.max_overfitting_gap:.4f}")
+                return GateResult(
+                    False,
+                    "Anomaly Guardrail",
+                    f"Severe overfitting detected: gap {gap:.4f} > {self.max_overfitting_gap:.4f}",
+                )
 
         return GateResult(True, "Anomaly Guardrail", "All validation anomaly guardrails clean.")
 
@@ -300,6 +346,7 @@ class ValidationGatekeeper:
 # ==============================================================================
 # 4. POST-HOC TEMPERATURE CALIBRATOR
 # ==============================================================================
+
 
 class TemperatureCalibrator:
     """Scales logits by optimal temperature T > 0 to optimize calibration and log loss."""
@@ -333,6 +380,7 @@ class TemperatureCalibrator:
 # 5. CONVEX ENSEMBLE BLENDER WITH TRUE OUTER META-CV
 # ==============================================================================
 
+
 class ConvexEnsembleBlender:
     """
     Finds optimal weights on the probability simplex (sum w_m = 1, w_m >= 0).
@@ -340,15 +388,15 @@ class ConvexEnsembleBlender:
     while refitting final weights on 100% of OOF data for test deployment only.
     """
 
-    def __init__(self, names: Optional[List[str]] = None):
+    def __init__(self, names: list[str] | None = None):
         self.names = names or []
-        self.final_weights: Optional[np.ndarray] = None
-        self.unbiased_meta_loss: Optional[float] = None
-        self.meta_oof: Optional[np.ndarray] = None
+        self.final_weights: np.ndarray | None = None
+        self.unbiased_meta_loss: float | None = None
+        self.meta_oof: np.ndarray | None = None
 
     def fit_nested_cv(
         self,
-        oofs: List[np.ndarray],
+        oofs: list[np.ndarray],
         y_true: np.ndarray,
         n_folds: int = 5,
         random_state: int = 42,
@@ -373,7 +421,9 @@ class ConvexEnsembleBlender:
         n_samples, n_models, n_classes = stacked.shape
 
         if n_samples != len(y_true):
-            raise ValueError(f"OOF samples ({n_samples}) and y_true length ({len(y_true)}) mismatch.")
+            raise ValueError(
+                f"OOF samples ({n_samples}) and y_true length ({len(y_true)}) mismatch."
+            )
 
         outer = KFold(n_splits=n_folds, shuffle=True, random_state=random_state)
         meta_oof = np.empty((n_samples, n_classes), dtype=np.float64)
@@ -414,14 +464,14 @@ class ConvexEnsembleBlender:
         self.final_weights = res_final.x / np.sum(res_final.x)
         return self
 
-    def blend(self, pred_list: List[np.ndarray]) -> np.ndarray:
+    def blend(self, pred_list: list[np.ndarray]) -> np.ndarray:
         if self.final_weights is None:
             raise ValueError("Blender must be fitted before blending.")
         stacked = np.stack([normalize_probabilities(p) for p in pred_list], axis=1)
         blended = np.einsum("m,nmc->nc", self.final_weights, stacked)
         return normalize_probabilities(blended)
 
-    def get_weight_summary(self) -> Dict[str, float]:
+    def get_weight_summary(self) -> dict[str, float]:
         if self.final_weights is None:
             return {}
         return {
@@ -434,9 +484,11 @@ class ConvexEnsembleBlender:
 # 6. CRYPTOGRAPHICALLY BOUND IRON RULE AUTHORIZATION GATE
 # ==============================================================================
 
+
 @dataclass(frozen=True)
 class AuthorizationRequest:
     """Immutable, cryptographically bound authorization contract."""
+
     experiment_id: str
     artifact_sha256: str
     prediction_sha256: str
@@ -448,7 +500,7 @@ class AuthorizationRequest:
     expires_at: str
 
 
-def compute_file_sha256(file_path: Union[str, Path]) -> str:
+def compute_file_sha256(file_path: str | Path) -> str:
     """Computes SHA-256 hash of a file on disk."""
     hasher = hashlib.sha256()
     with open(file_path, "rb") as f:
@@ -472,16 +524,20 @@ class SubmissionAuthorizationGate:
         exp_id: str,
         model_name: str,
         oof_score: float,
-        best_score: Optional[float],
+        best_score: float | None,
         submission_path: Path,
         preview_df: pd.DataFrame,
-        config_path: Optional[Path] = None,
+        config_path: Path | None = None,
         code_revision: str = "HEAD",
-    ) -> Tuple[AuthorizationRequest, Path]:
+    ) -> tuple[AuthorizationRequest, Path]:
         """Creates formal SHA-256 bound request document and structured record."""
         artifact_hash = compute_file_sha256(submission_path)
         pred_hash = hashlib.sha256(preview_df.to_csv(index=False).encode("utf-8")).hexdigest()
-        cfg_hash = compute_file_sha256(config_path) if config_path and config_path.exists() else "unspecified"
+        cfg_hash = (
+            compute_file_sha256(config_path)
+            if config_path and config_path.exists()
+            else "unspecified"
+        )
         now_str = datetime.now(timezone.utc).isoformat()
 
         req = AuthorizationRequest(
@@ -540,7 +596,7 @@ python cli.py submit --reject {exp_id} --reason "Explain reason"
         self,
         request: AuthorizationRequest,
         submission_path: Path,
-        current_config_path: Optional[Path] = None,
+        current_config_path: Path | None = None,
         current_code_revision: str = "HEAD",
     ) -> None:
         """
@@ -554,10 +610,16 @@ python cli.py submit --reject {exp_id} --reason "Explain reason"
                 f"Expected {request.artifact_sha256[:16]}, got {current_artifact_hash[:16]}."
             )
 
-        if current_config_path and current_config_path.exists() and request.config_sha256 != "unspecified":
+        if (
+            current_config_path
+            and current_config_path.exists()
+            and request.config_sha256 != "unspecified"
+        ):
             curr_cfg_hash = compute_file_sha256(current_config_path)
             if curr_cfg_hash != request.config_sha256:
-                raise RuntimeError("CRITICAL: Experiment configuration was modified after authorization was requested.")
+                raise RuntimeError(
+                    "CRITICAL: Experiment configuration was modified after authorization was requested."
+                )
 
 
 # ==============================================================================
@@ -601,7 +663,9 @@ if __name__ == "__main__":
     p_a = normalize_probabilities(np.random.uniform(0.1, 0.9, size=(100, 3)))
     p_b = p_a + np.random.normal(0, 0.02, size=(100, 3))
     sym_res = gatekeeper.check_symmetry(p_a, p_b)
-    print(f"   Symmetry TV Distance: {sym_res.details.get('div_tv'):.4f} | Passed: {sym_res.passed}")
+    print(
+        f"   Symmetry TV Distance: {sym_res.details.get('div_tv'):.4f} | Passed: {sym_res.passed}"
+    )
 
     # 4. Test True Outer Meta-CV Ensemble Blending
     print("\n4. Testing True Outer Meta-CV Ensemble Blending:")
@@ -620,7 +684,14 @@ if __name__ == "__main__":
     sub_dir = Path("submissions")
     sub_dir.mkdir(parents=True, exist_ok=True)
     demo_sub_path = sub_dir / "demo_submission.csv"
-    demo_sub_df = pd.DataFrame({"id": [1, 2, 3], "prob_0": [0.7, 0.2, 0.1], "prob_1": [0.2, 0.7, 0.1], "prob_2": [0.1, 0.1, 0.8]})
+    demo_sub_df = pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "prob_0": [0.7, 0.2, 0.1],
+            "prob_1": [0.2, 0.7, 0.1],
+            "prob_2": [0.1, 0.1, 0.8],
+        }
+    )
     demo_sub_df.to_csv(demo_sub_path, index=False)
 
     auth_gate = SubmissionAuthorizationGate(reports_dir="reports")

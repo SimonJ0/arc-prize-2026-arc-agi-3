@@ -4,35 +4,34 @@ Orchestrates autonomous hypotheses execution, 5-fold cross-validation,
 gate checks, diagnostic HTML generation, ensembling, and the Iron Rule submission gate.
 """
 
-from datetime import datetime
 import json
-import os
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import yaml
 
+from src.core.adaptive import AdaptiveHypothesisGenerator
+from src.core.calibration import TemperatureCalibrator
+from src.core.gates import GateResult, ValidationGatekeeper
 from src.core.metrics import (
     CLASSES,
     compute_log_loss,
     evaluate_predictions,
-    normalize_probabilities,
 )
-from src.core.calibration import TemperatureCalibrator
-from src.core.gates import GateResult, ValidationGatekeeper
 from src.data.loader import DataLoader
 from src.data.splitter import DatasetSplitter
-from src.features.extractor import FeatureExtractor
-from src.features.text_vectorizer import TextVectorizer
-from src.features.lsa_vectorizer import DenseLSAVectorizer
-from src.models.length_prior import LengthPriorPredictor
-from src.models.gbdt_classifier import LightGBMPredictor
-from src.models.tfidf_linear import TfidfLogisticPredictor
-from src.models.ensemble import EnsembleBlender
-from src.core.adaptive import AdaptiveHypothesisGenerator
 from src.evaluation.diagnostics import DiagnosticEngine
 from src.evaluation.html_reporter import HtmlReportGenerator
+from src.features.extractor import FeatureExtractor
+from src.features.lsa_vectorizer import DenseLSAVectorizer
+from src.features.text_vectorizer import TextVectorizer
+from src.models.ensemble import EnsembleBlender
+from src.models.gbdt_classifier import LightGBMPredictor
+from src.models.length_prior import LengthPriorPredictor
+from src.models.tfidf_linear import TfidfLogisticPredictor
 from src.submit.generator import SubmissionGenerator
 from src.submit.submission_gate import SubmissionAuthorizationGate
 
@@ -49,10 +48,10 @@ class SelfDrivingResearchLoop:
     ):
         self.config_path = Path(config_path)
         self.hypotheses_path = Path(hypotheses_path)
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             self.config = yaml.safe_load(f)
 
-        with open(hypotheses_path, "r", encoding="utf-8") as f:
+        with open(hypotheses_path, encoding="utf-8") as f:
             self.hypotheses_data = yaml.safe_load(f)
 
         self.data_loader = DataLoader(data_dir=self.config["paths"]["raw_data_dir"])
@@ -67,8 +66,12 @@ class SelfDrivingResearchLoop:
         )
         self.diagnostics_engine = DiagnosticEngine()
         self.html_reporter = HtmlReportGenerator(output_dir=self.config["paths"]["reports_dir"])
-        self.submission_generator = SubmissionGenerator(output_dir=self.config["paths"]["submissions_dir"])
-        self.auth_gate = SubmissionAuthorizationGate(reports_dir=self.config["paths"]["reports_dir"])
+        self.submission_generator = SubmissionGenerator(
+            output_dir=self.config["paths"]["submissions_dir"]
+        )
+        self.auth_gate = SubmissionAuthorizationGate(
+            reports_dir=self.config["paths"]["reports_dir"]
+        )
 
         self.experiments_dir = Path(self.config["paths"]["experiments_dir"])
         self.experiments_dir.mkdir(parents=True, exist_ok=True)
@@ -76,12 +79,12 @@ class SelfDrivingResearchLoop:
         self.state_path = self.experiments_dir / "ensemble_state.npz"
 
         self.registry = self._load_registry()
-        self.best_log_loss: Optional[float] = self._get_current_best_loss()
-        self.ensemble_oofs: List[np.ndarray] = []
-        self.ensemble_names: List[str] = []
-        self.trained_models: Dict[str, List[Any]] = {}
-        self.temperature_calibrators: Dict[str, TemperatureCalibrator] = {}
-        self._last_blender: Optional[EnsembleBlender] = None
+        self.best_log_loss: float | None = self._get_current_best_loss()
+        self.ensemble_oofs: list[np.ndarray] = []
+        self.ensemble_names: list[str] = []
+        self.trained_models: dict[str, list[Any]] = {}
+        self.temperature_calibrators: dict[str, TemperatureCalibrator] = {}
+        self._last_blender: EnsembleBlender | None = None
 
         self._load_ensemble_state()
 
@@ -102,13 +105,15 @@ class SelfDrivingResearchLoop:
                 data = np.load(self.state_path, allow_pickle=True)
                 self.ensemble_oofs = [oof for oof in data["oofs"]]
                 self.ensemble_names = [str(n) for n in data["names"]]
-                print(f"[STATE] Restored {len(self.ensemble_oofs)} models in ensemble pool from {self.state_path.name}")
+                print(
+                    f"[STATE] Restored {len(self.ensemble_oofs)} models in ensemble pool from {self.state_path.name}"
+                )
             except Exception as e:
                 print(f"[STATE] Could not load ensemble state: {e}")
 
-    def _load_registry(self) -> Dict[str, Any]:
+    def _load_registry(self) -> dict[str, Any]:
         if self.registry_path.exists():
-            with open(self.registry_path, "r", encoding="utf-8") as f:
+            with open(self.registry_path, encoding="utf-8") as f:
                 return json.load(f)
         return {"experiments": [], "current_best": None}
 
@@ -127,7 +132,7 @@ class SelfDrivingResearchLoop:
         with open(self.registry_path, "w", encoding="utf-8") as f:
             json.dump(self.registry, f, indent=2, default=_json_convert)
 
-    def _get_current_best_loss(self) -> Optional[float]:
+    def _get_current_best_loss(self) -> float | None:
         best = None
         for exp in self.registry.get("experiments", []):
             if exp.get("status") == "PASSED":
@@ -141,20 +146,22 @@ class SelfDrivingResearchLoop:
         """Generates clean Markdown leaderboard of all iterations."""
         reports_dir = Path(self.config["paths"]["reports_dir"])
         reports_dir.mkdir(parents=True, exist_ok=True)
-        
+
         rows = []
         for exp in self.registry.get("experiments", []):
             m = exp.get("metrics", {})
-            rows.append({
-                "ID": exp.get("id"),
-                "Model": exp.get("model_name"),
-                "Status": exp.get("status"),
-                "Log Loss": f"{m.get('log_loss', 9.99):.5f}",
-                "Brier": f"{m.get('brier_score', 9.99):.5f}",
-                "ECE": f"{m.get('ece', 9.99):.4f}",
-                "Sym Div": f"{exp.get('symmetry_divergence', 0.0):.4f}",
-                "Timestamp": exp.get("timestamp", ""),
-            })
+            rows.append(
+                {
+                    "ID": exp.get("id"),
+                    "Model": exp.get("model_name"),
+                    "Status": exp.get("status"),
+                    "Log Loss": f"{m.get('log_loss', 9.99):.5f}",
+                    "Brier": f"{m.get('brier_score', 9.99):.5f}",
+                    "ECE": f"{m.get('ece', 9.99):.4f}",
+                    "Sym Div": f"{exp.get('symmetry_divergence', 0.0):.4f}",
+                    "Timestamp": exp.get("timestamp", ""),
+                }
+            )
 
         df_board = pd.DataFrame(rows)
         if not df_board.empty:
@@ -165,8 +172,8 @@ class SelfDrivingResearchLoop:
 
         content = f"""# Autonomous Research Leaderboard
 
-Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-Competition: `{self.config['competition']['name']}`
+Updated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+Competition: `{self.config["competition"]["name"]}`
 Optimization Metric: `Multi-Class Log Loss (Lower is better)`
 
 {table_md}
@@ -174,7 +181,9 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         with open(reports_dir / "leaderboard.md", "w", encoding="utf-8") as f:
             f.write(content)
 
-    def run_experiment(self, hypothesis_spec: Dict[str, Any], df_train: pd.DataFrame, df_test: pd.DataFrame) -> Dict[str, Any]:
+    def run_experiment(
+        self, hypothesis_spec: dict[str, Any], df_train: pd.DataFrame, df_test: pd.DataFrame
+    ) -> dict[str, Any]:
         """
         Executes a single experiment cycle end-to-end:
         1. Feature preparation
@@ -190,30 +199,32 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         hyp_text = hypothesis_spec["hypothesis"]
         params = hypothesis_spec.get("parameters", {})
 
-        print(f"\n[{'='*30}]")
+        print(f"\n[{'=' * 30}]")
         print(f"Executing {exp_id}: {model_name} ({model_type})")
         print(f"Hypothesis: {hyp_text}")
-        print(f"[{'='*30}]\n")
+        print(f"[{'=' * 30}]\n")
 
         # 1. Feature preparation & Splits
-        splits = self.splitter.split(df_train, group_by_prompt=self.config["cross_validation"]["group_by_prompt"])
+        splits = self.splitter.split(
+            df_train, group_by_prompt=self.config["cross_validation"]["group_by_prompt"]
+        )
         y_true = df_train[CLASSES].values
         y_indices = df_train["target"].values
         n_samples = len(df_train)
 
         oof_preds = np.zeros((n_samples, 3))
         oof_swapped = np.zeros((n_samples, 3))
-        fold_losses = []
-        feat_importances = {}
-        fold_models = []
+        fold_losses: list[float] = []
+        feat_importances: dict[str, float] = {}
+        fold_models: list[Any] = []
 
         if model_type == "length_prior":
             extractor = FeatureExtractor()
             X_feats = extractor.extract_features(df_train)
             X_swap = extractor.extract_swapped_features(df_train)
 
-            for fold_idx, (train_idx, val_idx) in enumerate(splits):
-                model = LengthPriorPredictor(beta=params.get("beta", 1.6))
+            for _fold_idx, (train_idx, val_idx) in enumerate(splits):
+                model: Any = LengthPriorPredictor(beta=params.get("beta", 1.6))
                 model.fit(X_feats.iloc[train_idx], y_indices[train_idx])
 
                 p_sym, p_norm, p_sw = model.predict_proba_with_tta(
@@ -267,17 +278,19 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                 feat_importances[feat] = feat_importances[feat] / len(splits)
 
         elif model_type == "tfidf_logistic":
-            for fold_idx, (train_idx, val_idx) in enumerate(splits):
+            for _fold_idx, (train_idx, val_idx) in enumerate(splits):
                 vectorizer = TextVectorizer(max_features=params.get("max_features", 5000))
                 train_fold_df = df_train.iloc[train_idx]
                 val_fold_df = df_train.iloc[val_idx]
 
                 # Fit ONLY on training fold text to eliminate leakage
-                train_texts = pd.concat([
-                    train_fold_df["prompt"],
-                    train_fold_df["response_a"],
-                    train_fold_df["response_b"],
-                ]).tolist()
+                train_texts = pd.concat(
+                    [
+                        train_fold_df["prompt"],
+                        train_fold_df["response_a"],
+                        train_fold_df["response_b"],
+                    ]
+                ).tolist()
                 vectorizer.fit(train_texts)
 
                 X_diff_train = vectorizer.transform_differential(train_fold_df, swap=False)
@@ -308,22 +321,38 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                 train_fold_df = df_train.iloc[train_idx]
                 val_fold_df = df_train.iloc[val_idx]
 
-                lsa_vec = DenseLSAVectorizer(n_components=n_comps, max_features=params.get("max_features", 5000))
-                train_texts = pd.concat([
-                    train_fold_df["prompt"],
-                    train_fold_df["response_a"],
-                    train_fold_df["response_b"],
-                ]).tolist()
+                lsa_vec = DenseLSAVectorizer(
+                    n_components=n_comps, max_features=params.get("max_features", 5000)
+                )
+                train_texts = pd.concat(
+                    [
+                        train_fold_df["prompt"],
+                        train_fold_df["response_a"],
+                        train_fold_df["response_b"],
+                    ]
+                ).tolist()
                 lsa_vec.fit(train_texts)
 
                 # Training fold LSA features
                 X_lsa_train = lsa_vec.extract_lsa_features(train_fold_df, swap=False)
-                X_train_f = pd.concat([X_feats.iloc[train_idx].reset_index(drop=True), X_lsa_train.reset_index(drop=True)], axis=1)
+                X_train_f = pd.concat(
+                    [
+                        X_feats.iloc[train_idx].reset_index(drop=True),
+                        X_lsa_train.reset_index(drop=True),
+                    ],
+                    axis=1,
+                )
                 y_train_f = y_indices[train_idx]
 
                 if params.get("symmetric_training", True):
                     X_lsa_train_swap = lsa_vec.extract_lsa_features(train_fold_df, swap=True)
-                    X_train_swap = pd.concat([X_swap.iloc[train_idx].reset_index(drop=True), X_lsa_train_swap.reset_index(drop=True)], axis=1)
+                    X_train_swap = pd.concat(
+                        [
+                            X_swap.iloc[train_idx].reset_index(drop=True),
+                            X_lsa_train_swap.reset_index(drop=True),
+                        ],
+                        axis=1,
+                    )
                     swap_map = {0: 1, 1: 0, 2: 2}
                     y_train_swap = np.array([swap_map[y] for y in y_train_f])
                     X_train_f = pd.concat([X_train_f, X_train_swap], ignore_index=True)
@@ -335,8 +364,20 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                 # Validation fold LSA features
                 X_lsa_val = lsa_vec.extract_lsa_features(val_fold_df, swap=False)
                 X_lsa_val_swap = lsa_vec.extract_lsa_features(val_fold_df, swap=True)
-                X_val_norm = pd.concat([X_feats.iloc[val_idx].reset_index(drop=True), X_lsa_val.reset_index(drop=True)], axis=1)
-                X_val_swap = pd.concat([X_swap.iloc[val_idx].reset_index(drop=True), X_lsa_val_swap.reset_index(drop=True)], axis=1)
+                X_val_norm = pd.concat(
+                    [
+                        X_feats.iloc[val_idx].reset_index(drop=True),
+                        X_lsa_val.reset_index(drop=True),
+                    ],
+                    axis=1,
+                )
+                X_val_swap = pd.concat(
+                    [
+                        X_swap.iloc[val_idx].reset_index(drop=True),
+                        X_lsa_val_swap.reset_index(drop=True),
+                    ],
+                    axis=1,
+                )
 
                 p_sym, p_norm, p_sw = model.predict_proba_with_tta(X_val_norm, X_val_swap)
                 oof_preds[val_idx] = p_sym
@@ -364,7 +405,7 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
             oof_preds = blender.blend(self.ensemble_oofs)
             # Under response swap, symmetric ensemble predictions swap win_a and win_b probabilities
             oof_swapped = np.column_stack([oof_preds[:, 1], oof_preds[:, 0], oof_preds[:, 2]])
-            fold_losses = [blender.optimal_log_loss] * len(splits)
+            fold_losses = [blender.optimal_log_loss or 0.0] * len(splits)
             print(f"Optimal ensemble weights (nested CV): {blender.get_weight_summary()}")
 
         else:
@@ -381,7 +422,9 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         cal_loss = compute_log_loss(y_true, calibrated_oofs)
 
         if cal_loss < raw_loss:
-            print(f"  [CALIBRATION] Temperature scaling (T={calibrator.temperature:.3f}) improved log loss: {raw_loss:.5f} -> {cal_loss:.5f}")
+            print(
+                f"  [CALIBRATION] Temperature scaling (T={calibrator.temperature:.3f}) improved log loss: {raw_loss:.5f} -> {cal_loss:.5f}"
+            )
             oof_preds = calibrated_oofs
             oof_swapped = calibrator.calibrate(oof_swapped)
         self.temperature_calibrators[exp_id] = calibrator
@@ -393,8 +436,12 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
 
         # 2. Gatekeeper Checks
         # Validate leakage across all K folds
-        leak_check = GateResult(passed=True, gate_name="Leakage Gate", message=f"All {len(splits)} folds verified leak-free.")
-        for fold_idx, (t_idx, v_idx) in enumerate(splits):
+        leak_check = GateResult(
+            passed=True,
+            gate_name="Leakage Gate",
+            message=f"All {len(splits)} folds verified leak-free.",
+        )
+        for _fold_idx, (t_idx, v_idx) in enumerate(splits):
             fold_leak = self.gatekeeper.check_leakage(t_idx, v_idx, oof_preds[v_idx])
             if not fold_leak.passed:
                 leak_check = fold_leak
@@ -423,13 +470,17 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                         details={"cv_delta": cv_delta, "div_details": div_check.details},
                     )
 
-        all_gates_passed = leak_check.passed and cv_check.passed and sym_check.passed and anomaly_check.passed
+        all_gates_passed = (
+            leak_check.passed and cv_check.passed and sym_check.passed and anomaly_check.passed
+        )
 
         print(f"Results for {exp_id}:")
         print(f"  OOF Log Loss: {overall_loss:.5f} (Fold Mean: {np.mean(fold_losses):.5f})")
         print(f"  Brier Score:  {metrics['brier_score']:.5f} | ECE: {metrics['ece']:.4f}")
         print(f"  Symmetry Div: {sym_div:.5f}")
-        print(f"  Gate Checks: Leakage={leak_check.passed}, CV={cv_check.passed}, Symmetry={sym_check.passed}, Diversity={div_check.passed}, Anomaly={anomaly_check.passed}")
+        print(
+            f"  Gate Checks: Leakage={leak_check.passed}, CV={cv_check.passed}, Symmetry={sym_check.passed}, Diversity={div_check.passed}, Anomaly={anomaly_check.passed}"
+        )
 
         delta = (overall_loss - self.best_log_loss) if self.best_log_loss is not None else None
 
@@ -453,7 +504,6 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         print(f"  HTML Report: {report_path}")
 
         # 4. Handle Promotion & Submission Gate
-        submission_path = None
         auth_req_path = None
 
         if all_gates_passed:
@@ -473,24 +523,36 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                     target_m = mod[0] if isinstance(mod, tuple) else mod
                     target_lsa = mod[1] if isinstance(mod, tuple) else None
                     if hasattr(target_m, "booster_model_string") and target_m.booster_model_string:
-                        (models_dir / f"booster_fold_{f_idx}.txt").write_text(target_m.booster_model_string, encoding="utf-8")
+                        (models_dir / f"booster_fold_{f_idx}.txt").write_text(
+                            target_m.booster_model_string, encoding="utf-8"
+                        )
                     if target_lsa is not None and hasattr(target_lsa, "tfidf"):
                         import pickle
+
                         with open(models_dir / f"lsa_data_fold_{f_idx}.pkl", "wb") as f:
-                            pickle.dump({
-                                "vocab": list(target_lsa.tfidf.get_feature_names_out()),
-                                "idf": target_lsa.tfidf.idf_,
-                                "comp": target_lsa.svd.components_,
-                            }, f)
+                            pickle.dump(
+                                {
+                                    "vocab": list(target_lsa.tfidf.get_feature_names_out()),
+                                    "idf": target_lsa.tfidf.idf_,
+                                    "comp": target_lsa.svd.components_,
+                                },
+                                f,
+                            )
 
             if self.best_log_loss is None or overall_loss < self.best_log_loss:
                 previous_best = self.best_log_loss
                 self.best_log_loss = overall_loss
-                delta_str = f"{- (overall_loss - previous_best):.5f} improvement" if previous_best else "initial baseline"
+                delta_str = (
+                    f"{-(overall_loss - previous_best):.5f} improvement"
+                    if previous_best
+                    else "initial baseline"
+                )
                 print(f"  >>> NEW BEST MODEL PROMOTED: {overall_loss:.5f} ({delta_str}) <<<")
 
                 # Generate fold-bagged test predictions
-                test_preds = self._predict_test_bagged(exp_id, model_type, params, df_train, df_test)
+                test_preds = self._predict_test_bagged(
+                    exp_id, model_type, params, df_train, df_test
+                )
                 sub_file = self.submission_generator.generate_submission_csv(
                     test_df=df_test,
                     preds=test_preds,
@@ -507,7 +569,11 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                 lgb_model_str = None
                 ensemble_weights = None
                 lsa_data = None
-                if model_type in ["lightgbm", "lsa_lightgbm"] and exp_id in self.trained_models and len(self.trained_models[exp_id]) > 0:
+                if (
+                    model_type in ["lightgbm", "lsa_lightgbm"]
+                    and exp_id in self.trained_models
+                    and len(self.trained_models[exp_id]) > 0
+                ):
                     m = self.trained_models[exp_id][0]
                     target_lsa = None
                     if isinstance(m, tuple):
@@ -517,7 +583,11 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                         target_m = m
                     if hasattr(target_m, "booster_model_string") and target_m.booster_model_string:
                         lgb_model_str = target_m.booster_model_string
-                    if target_lsa is not None and hasattr(target_lsa, "tfidf") and hasattr(target_lsa, "svd"):
+                    if (
+                        target_lsa is not None
+                        and hasattr(target_lsa, "tfidf")
+                        and hasattr(target_lsa, "svd")
+                    ):
                         lsa_data = {
                             "vocab": list(target_lsa.tfidf.get_feature_names_out()),
                             "idf": target_lsa.tfidf.idf_,
@@ -526,13 +596,21 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                 elif model_type == "ensemble":
                     if self._last_blender is not None:
                         ensemble_weights = self._last_blender.get_weight_summary()
-                    for mid, fmods in self.trained_models.items():
+                    for _mid, fmods in self.trained_models.items():
                         for m in fmods:
                             target_m = m[0] if isinstance(m, tuple) else m
                             target_lsa = m[1] if isinstance(m, tuple) else None
-                            if lgb_model_str is None and hasattr(target_m, "booster_model_string") and target_m.booster_model_string:
+                            if (
+                                lgb_model_str is None
+                                and hasattr(target_m, "booster_model_string")
+                                and target_m.booster_model_string
+                            ):
                                 lgb_model_str = target_m.booster_model_string
-                            if lsa_data is None and target_lsa is not None and hasattr(target_lsa, "tfidf"):
+                            if (
+                                lsa_data is None
+                                and target_lsa is not None
+                                and hasattr(target_lsa, "tfidf")
+                            ):
                                 lsa_data = {
                                     "vocab": list(target_lsa.tfidf.get_feature_names_out()),
                                     "idf": target_lsa.tfidf.idf_,
@@ -548,6 +626,7 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                                 l_file = models_base / candidate_id / "lsa_data_fold_0.pkl"
                                 if l_file.exists():
                                     import pickle
+
                                     with open(l_file, "rb") as f:
                                         lsa_data = pickle.load(f)
                                 break
@@ -569,10 +648,16 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                     submission_csv_path=sub_file,
                     preview_df=pd.read_csv(sub_file),
                 )
-                print(f"  [IRON RULE] Submission Authorization Request generated at: {auth_req_path}")
+                print(
+                    f"  [IRON RULE] Submission Authorization Request generated at: {auth_req_path}"
+                )
         else:
             status = "REJECTED"
-            rej_reason = cv_check.message if not cv_check.passed else (anomaly_check.message if not anomaly_check.passed else sym_check.message)
+            rej_reason = (
+                cv_check.message
+                if not cv_check.passed
+                else (anomaly_check.message if not anomaly_check.passed else sym_check.message)
+            )
             print(f"  [GATE REJECTED] Model rejected by gates: {rej_reason}")
 
         # 5. Record Experiment in Registry
@@ -601,7 +686,9 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
 
         return exp_record
 
-    def _predict_test(self, model_type: str, params: Dict[str, Any], df_train: pd.DataFrame, df_test: pd.DataFrame) -> np.ndarray:
+    def _predict_test(
+        self, model_type: str, params: dict[str, Any], df_train: pd.DataFrame, df_test: pd.DataFrame
+    ) -> np.ndarray:
         """Generates test predictions with full TTA for submission."""
         extractor = FeatureExtractor()
         X_train = extractor.extract_features(df_train)
@@ -609,7 +696,7 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         X_test_swap = extractor.extract_swapped_features(df_test)
 
         if model_type == "length_prior":
-            model = LengthPriorPredictor(beta=params.get("beta", 1.6))
+            model: Any = LengthPriorPredictor(beta=params.get("beta", 1.6))
             model.fit(X_train, df_train["target"].values)
             p_sym, _, _ = model.predict_proba_with_tta(X_test, X_test_swap)
             return p_sym
@@ -633,7 +720,9 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         elif model_type == "tfidf_logistic":
             vectorizer = TextVectorizer(max_features=params.get("max_features", 5000))
             # Fit vocabulary only on training data
-            train_texts = pd.concat([df_train["prompt"], df_train["response_a"], df_train["response_b"]]).tolist()
+            train_texts = pd.concat(
+                [df_train["prompt"], df_train["response_a"], df_train["response_b"]]
+            ).tolist()
             vectorizer.fit(train_texts)
             X_diff_train = vectorizer.transform_differential(df_train, swap=False)
             X_diff_test = vectorizer.transform_differential(df_test, swap=False)
@@ -650,18 +739,28 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
             X_test = extractor.extract_features(df_test)
             X_test_swap = extractor.extract_swapped_features(df_test)
 
-            lsa_vec = DenseLSAVectorizer(n_components=params.get("n_components", 16), max_features=params.get("max_features", 5000))
-            train_texts = pd.concat([df_train["prompt"], df_train["response_a"], df_train["response_b"]]).tolist()
+            lsa_vec = DenseLSAVectorizer(
+                n_components=params.get("n_components", 16),
+                max_features=params.get("max_features", 5000),
+            )
+            train_texts = pd.concat(
+                [df_train["prompt"], df_train["response_a"], df_train["response_b"]]
+            ).tolist()
             lsa_vec.fit(train_texts)
 
             X_lsa_train = lsa_vec.extract_lsa_features(df_train, swap=False)
-            X_train_fit = pd.concat([X_train.reset_index(drop=True), X_lsa_train.reset_index(drop=True)], axis=1)
+            X_train_fit = pd.concat(
+                [X_train.reset_index(drop=True), X_lsa_train.reset_index(drop=True)], axis=1
+            )
             y_train_fit = df_train["target"].values
 
             if params.get("symmetric_training", True):
                 X_swap_train = extractor.extract_swapped_features(df_train)
                 X_lsa_train_swap = lsa_vec.extract_lsa_features(df_train, swap=True)
-                X_train_swap = pd.concat([X_swap_train.reset_index(drop=True), X_lsa_train_swap.reset_index(drop=True)], axis=1)
+                X_train_swap = pd.concat(
+                    [X_swap_train.reset_index(drop=True), X_lsa_train_swap.reset_index(drop=True)],
+                    axis=1,
+                )
                 swap_map = {0: 1, 1: 0, 2: 2}
                 y_train_swap = np.array([swap_map[y] for y in y_train_fit])
                 X_train_fit = pd.concat([X_train_fit, X_train_swap], ignore_index=True)
@@ -669,8 +768,12 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
 
             X_lsa_test = lsa_vec.extract_lsa_features(df_test, swap=False)
             X_lsa_test_swap = lsa_vec.extract_lsa_features(df_test, swap=True)
-            X_test_norm = pd.concat([X_test.reset_index(drop=True), X_lsa_test.reset_index(drop=True)], axis=1)
-            X_test_sw = pd.concat([X_test_swap.reset_index(drop=True), X_lsa_test_swap.reset_index(drop=True)], axis=1)
+            X_test_norm = pd.concat(
+                [X_test.reset_index(drop=True), X_lsa_test.reset_index(drop=True)], axis=1
+            )
+            X_test_sw = pd.concat(
+                [X_test_swap.reset_index(drop=True), X_lsa_test_swap.reset_index(drop=True)], axis=1
+            )
 
             model = LightGBMPredictor(params=params)
             model.fit(X_train_fit, y_train_fit)
@@ -686,13 +789,33 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
             for name in self.ensemble_names:
                 matched_hyp = hyp_by_name.get(name)
                 if matched_hyp is not None:
-                    p = self._predict_test(matched_hyp["model_type"], matched_hyp.get("parameters", {}), df_train, df_test)
+                    p = self._predict_test(
+                        matched_hyp["model_type"],
+                        matched_hyp.get("parameters", {}),
+                        df_train,
+                        df_test,
+                    )
                 elif "length" in name.lower():
-                    p = self._predict_test("length_prior", hyp_by_type.get("length_prior", {}).get("parameters", {}), df_train, df_test)
+                    p = self._predict_test(
+                        "length_prior",
+                        hyp_by_type.get("length_prior", {}).get("parameters", {}),
+                        df_train,
+                        df_test,
+                    )
                 elif "lightgbm" in name.lower() or "structural" in name.lower():
-                    p = self._predict_test("lightgbm", hyp_by_type.get("lightgbm", {}).get("parameters", {}), df_train, df_test)
+                    p = self._predict_test(
+                        "lightgbm",
+                        hyp_by_type.get("lightgbm", {}).get("parameters", {}),
+                        df_train,
+                        df_test,
+                    )
                 elif "tfidf" in name.lower():
-                    p = self._predict_test("tfidf_logistic", hyp_by_type.get("tfidf_logistic", {}).get("parameters", {}), df_train, df_test)
+                    p = self._predict_test(
+                        "tfidf_logistic",
+                        hyp_by_type.get("tfidf_logistic", {}).get("parameters", {}),
+                        df_train,
+                        df_test,
+                    )
                 else:
                     p = np.full((len(df_test), 3), 1.0 / 3.0)
                 pred_list.append(p)
@@ -708,35 +831,55 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         self,
         exp_id: str,
         model_type: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         df_train: pd.DataFrame,
         df_test: pd.DataFrame,
     ) -> np.ndarray:
         """Generates bagged test predictions across all K CV folds with TTA and calibration."""
         if model_type == "ensemble":
-            print(f"  [BAGGING] Generating blended predictions from bagged member models.")
+            print("  [BAGGING] Generating blended predictions from bagged member models.")
             hyp_by_name = {h["name"]: h for h in self.hypotheses_data.get("hypotheses", [])}
             hyp_by_type = {h["model_type"]: h for h in self.hypotheses_data.get("hypotheses", [])}
             pred_list = []
             for name in self.ensemble_names:
                 matched_hyp = hyp_by_name.get(name)
                 if matched_hyp is not None:
-                    p = self._predict_test_bagged(matched_hyp["id"], matched_hyp["model_type"], matched_hyp.get("parameters", {}), df_train, df_test)
+                    p = self._predict_test_bagged(
+                        matched_hyp["id"],
+                        matched_hyp["model_type"],
+                        matched_hyp.get("parameters", {}),
+                        df_train,
+                        df_test,
+                    )
                 elif "length" in name.lower():
                     h = hyp_by_type.get("length_prior", {})
-                    p = self._predict_test_bagged(h.get("id", "H001"), "length_prior", h.get("parameters", {}), df_train, df_test)
+                    p = self._predict_test_bagged(
+                        h.get("id", "H001"),
+                        "length_prior",
+                        h.get("parameters", {}),
+                        df_train,
+                        df_test,
+                    )
                 elif "lightgbm" in name.lower() or "structural" in name.lower():
                     h = hyp_by_type.get("lightgbm", {})
-                    p = self._predict_test_bagged(h.get("id", "H002"), "lightgbm", h.get("parameters", {}), df_train, df_test)
+                    p = self._predict_test_bagged(
+                        h.get("id", "H002"), "lightgbm", h.get("parameters", {}), df_train, df_test
+                    )
                 elif "tfidf" in name.lower():
                     h = hyp_by_type.get("tfidf_logistic", {})
-                    p = self._predict_test_bagged(h.get("id", "H003"), "tfidf_logistic", h.get("parameters", {}), df_train, df_test)
+                    p = self._predict_test_bagged(
+                        h.get("id", "H003"),
+                        "tfidf_logistic",
+                        h.get("parameters", {}),
+                        df_train,
+                        df_test,
+                    )
                 else:
                     p = np.full((len(df_test), 3), 1.0 / 3.0)
                 pred_list.append(p)
 
             blender = self._last_blender
-            if blender is None or len(blender.weights) != len(pred_list):
+            if blender is None or blender.weights is None or len(blender.weights) != len(pred_list):
                 blender = EnsembleBlender(names=self.ensemble_names)
                 blender.fit_with_nested_cv(self.ensemble_oofs, df_train[CLASSES].values)
             preds = blender.blend(pred_list)
@@ -744,22 +887,30 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         else:
             fold_models = self.trained_models.get(exp_id, [])
             if not fold_models:
-                print(f"  [BAGGING] No fold models cached for {exp_id}, falling back to full-fit prediction.")
+                print(
+                    f"  [BAGGING] No fold models cached for {exp_id}, falling back to full-fit prediction."
+                )
                 preds = self._predict_test(model_type, params, df_train, df_test)
             else:
-                print(f"  [BAGGING] Generating test predictions bagged across {len(fold_models)} CV fold models.")
+                print(
+                    f"  [BAGGING] Generating test predictions bagged across {len(fold_models)} CV fold models."
+                )
                 if model_type == "length_prior":
                     extractor = FeatureExtractor()
                     X_test = extractor.extract_features(df_test)
                     X_test_swap = extractor.extract_swapped_features(df_test)
-                    fold_preds = [m.predict_proba_with_tta(X_test, X_test_swap)[0] for m in fold_models]
+                    fold_preds = [
+                        m.predict_proba_with_tta(X_test, X_test_swap)[0] for m in fold_models
+                    ]
                     preds = np.mean(fold_preds, axis=0)
 
                 elif model_type == "lightgbm":
                     extractor = FeatureExtractor()
                     X_test = extractor.extract_features(df_test)
                     X_test_swap = extractor.extract_swapped_features(df_test)
-                    fold_preds = [m.predict_proba_with_tta(X_test, X_test_swap)[0] for m in fold_models]
+                    fold_preds = [
+                        m.predict_proba_with_tta(X_test, X_test_swap)[0] for m in fold_models
+                    ]
                     preds = np.mean(fold_preds, axis=0)
 
                 elif model_type == "lsa_lightgbm":
@@ -771,8 +922,20 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
                     for mod, lsa_vec in fold_models:
                         X_lsa_test = lsa_vec.extract_lsa_features(df_test, swap=False)
                         X_lsa_test_swap = lsa_vec.extract_lsa_features(df_test, swap=True)
-                        X_test_norm = pd.concat([X_feats_test.reset_index(drop=True), X_lsa_test.reset_index(drop=True)], axis=1)
-                        X_test_swap = pd.concat([X_feats_test_swap.reset_index(drop=True), X_lsa_test_swap.reset_index(drop=True)], axis=1)
+                        X_test_norm = pd.concat(
+                            [
+                                X_feats_test.reset_index(drop=True),
+                                X_lsa_test.reset_index(drop=True),
+                            ],
+                            axis=1,
+                        )
+                        X_test_swap = pd.concat(
+                            [
+                                X_feats_test_swap.reset_index(drop=True),
+                                X_lsa_test_swap.reset_index(drop=True),
+                            ],
+                            axis=1,
+                        )
                         p_sym, _, _ = mod.predict_proba_with_tta(X_test_norm, X_test_swap)
                         fold_preds.append(p_sym)
                     preds = np.mean(fold_preds, axis=0)
@@ -795,7 +958,7 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
 
         return preds
 
-    def run_all_hypotheses(self, sample_size: Optional[int] = 10000, force_rerun: bool = False):
+    def run_all_hypotheses(self, sample_size: int | None = 10000, force_rerun: bool = False):
         """Runs through all hypotheses in the queue with crash resilience and resumability."""
         if force_rerun:
             self.best_log_loss = None
@@ -821,22 +984,26 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         for hyp in self.hypotheses_data.get("hypotheses", []):
             hyp_id = hyp.get("id")
             if not force_rerun and hyp_id in passed_ids:
-                print(f"\n[SKIP] Hypothesis {hyp_id} ({hyp.get('name')}) already PASSED in registry. Set force_rerun=True to re-execute.")
+                print(
+                    f"\n[SKIP] Hypothesis {hyp_id} ({hyp.get('name')}) already PASSED in registry. Set force_rerun=True to re-execute."
+                )
                 continue
 
             try:
                 self.run_experiment(hyp, df_train, df_test)
             except Exception as e:
                 print(f"\n[ERROR] Experiment {hyp.get('id')} crashed: {e}")
-                self.registry["experiments"].append({
-                    "id": hyp.get("id"),
-                    "model_name": hyp.get("name"),
-                    "model_type": hyp.get("model_type"),
-                    "hypothesis": hyp.get("hypothesis"),
-                    "status": "ERROR",
-                    "error": str(e),
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                })
+                self.registry["experiments"].append(
+                    {
+                        "id": hyp.get("id"),
+                        "model_name": hyp.get("name"),
+                        "model_type": hyp.get("model_type"),
+                        "hypothesis": hyp.get("hypothesis"),
+                        "status": "ERROR",
+                        "error": str(e),
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    }
+                )
                 self._save_registry()
                 self.update_leaderboard_md()
 
@@ -848,7 +1015,7 @@ Optimization Metric: `Multi-Class Log Loss (Lower is better)`
         proposed = adaptive_gen.propose_next_hypothesis()
         registered = adaptive_gen.register_proposed_hypothesis(proposed)
         if registered:
-            print(f"\n[ADAPTIVE RESEARCH LOOP] Proposing Next Experiment:")
+            print("\n[ADAPTIVE RESEARCH LOOP] Proposing Next Experiment:")
             print(f"  ID: {proposed['id']} ({proposed['name']})")
             print(f"  Hypothesis: {proposed['hypothesis']}")
             print(f"  Rationale: {proposed.get('rationale')}")

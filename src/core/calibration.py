@@ -3,7 +3,6 @@ Post-Hoc Probability Calibration Engine for Multi-Class Log Loss.
 Implements Softmax Temperature Scaling over probability / pseudo-logit representations.
 """
 
-from typing import Optional, Tuple
 import numpy as np
 from scipy.optimize import minimize_scalar
 
@@ -17,7 +16,7 @@ class TemperatureCalibrator:
     to minimize Kaggle multi-class log loss by fixing overconfidence or underconfidence.
     """
 
-    def __init__(self, bounds: Tuple[float, float] = (0.1, 5.0)):
+    def __init__(self, bounds: tuple[float, float] = (0.1, 5.0)):
         self.bounds = bounds
         self.temperature: float = 1.0
         self.is_fitted: bool = False
@@ -37,7 +36,7 @@ class TemperatureCalibrator:
     def fit(self, y_true: np.ndarray, probs: np.ndarray) -> "TemperatureCalibrator":
         """
         Finds the optimal temperature parameter T that minimizes log loss on validation predictions.
-        
+
         Args:
             y_true: Ground truth target array (N, 3).
             probs: Uncalibrated predicted probabilities (N, 3).

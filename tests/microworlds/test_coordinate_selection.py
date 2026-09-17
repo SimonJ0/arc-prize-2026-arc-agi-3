@@ -7,11 +7,9 @@ Verifies that:
 """
 
 import numpy as np
-import pytest
 from arcengine import GameAction, GameState
 
 from agent.my_agent import MyAgent
-from src.arc_agent.legality_adapter import LegalityAdapter
 
 
 class TargetClickEnv:
@@ -37,7 +35,7 @@ class TargetClickEnv:
         grid[self.target_y, self.target_x] = 5  # Target button color = 5
         return [grid]
 
-    def step(self, action: GameAction, payload: dict = None):
+    def step(self, action: GameAction, payload: dict | None = None):
         self.step_count += 1
         if action == GameAction.ACTION6 and payload:
             x = payload.get("x", -1)

@@ -2,9 +2,8 @@
 Unit tests for AdaptiveHypothesisGenerator.
 """
 
-import pytest
 import yaml
-from pathlib import Path
+
 from src.core.adaptive import AdaptiveHypothesisGenerator
 
 

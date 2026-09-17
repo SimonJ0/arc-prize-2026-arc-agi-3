@@ -3,11 +3,11 @@ Unit tests for the official ARC-AGI PlatformBenchmarkSuite.
 """
 
 from pathlib import Path
-import pytest
+
 from src.arc_core.platform_bench import (
-    PlatformBenchmarkSuite,
-    TRAIN_GAMES,
     HOLDOUT_GAMES,
+    TRAIN_GAMES,
+    PlatformBenchmarkSuite,
 )
 
 
@@ -84,4 +84,3 @@ def test_platform_multi_budget_evaluation(tmp_path):
     assert "report_path" in multi_summary
     report_file = Path(multi_summary["report_path"])
     assert report_file.exists()
-

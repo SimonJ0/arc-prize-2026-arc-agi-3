@@ -4,16 +4,17 @@ Extracts low-dimensional dense semantic representations of prompts and responses
 using n-gram TF-IDF and TruncatedSVD with strict position symmetry guarantees.
 """
 
-from typing import Any, List, Optional
+from typing import Any
+
 import numpy as np
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction.text import TfidfVectorizer
 
 from src.features.extractor import safe_parse_dialogue
 
 
-def _clean_dialogue_texts(texts: List[Any]) -> List[str]:
+def _clean_dialogue_texts(texts: list[Any]) -> list[str]:
     """Decodes multi-turn dialogue lists into unified clean text strings."""
     return ["\n\n".join(safe_parse_dialogue(t)) for t in texts]
 
@@ -43,7 +44,7 @@ class DenseLSAVectorizer:
         self.svd = TruncatedSVD(n_components=n_components, random_state=random_state)
         self.is_fitted = False
 
-    def fit(self, texts: List[Any]) -> "DenseLSAVectorizer":
+    def fit(self, texts: list[Any]) -> "DenseLSAVectorizer":
         """Fits vocabulary and latent semantic components strictly on training text."""
         clean_texts = _clean_dialogue_texts(texts)
         tfidf_mat = self.tfidf.fit_transform(clean_texts)
@@ -51,7 +52,7 @@ class DenseLSAVectorizer:
         self.is_fitted = True
         return self
 
-    def transform(self, texts: List[Any]) -> np.ndarray:
+    def transform(self, texts: list[Any]) -> np.ndarray:
         """Projects texts into the latent semantic space."""
         if not self.is_fitted:
             raise RuntimeError("DenseLSAVectorizer must be fitted before calling transform().")

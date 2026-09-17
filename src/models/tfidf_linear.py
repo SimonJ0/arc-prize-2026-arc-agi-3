@@ -3,12 +3,13 @@ Linear Model on TF-IDF Differential Text Representations.
 Complements tree-based structural features by capturing high-dimensional lexical cues.
 """
 
-from typing import Any, Optional
+from typing import Any
+
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 
-from src.models.base import BasePreferencePredictor
 from src.core.metrics import normalize_probabilities
+from src.models.base import BasePreferencePredictor
 
 
 class TfidfLogisticPredictor(BasePreferencePredictor):

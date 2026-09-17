@@ -5,7 +5,6 @@ and reach a goal in an interactive 2D grid environment.
 """
 
 import numpy as np
-import pytest
 from arcengine import GameAction, GameState
 
 from agent.my_agent import MyAgent
@@ -29,7 +28,7 @@ class GridWorldEnv:
     def frame(self):
         grid = np.zeros((self.grid_size, self.grid_size), dtype=int)
         grid[self.avatar_pos[0], self.avatar_pos[1]] = 3  # Avatar = color 3
-        grid[self.goal_pos[0], self.goal_pos[1]] = 8      # Goal = color 8
+        grid[self.goal_pos[0], self.goal_pos[1]] = 8  # Goal = color 8
         return [grid]
 
     def step(self, action: GameAction):
@@ -56,7 +55,7 @@ def test_agent_navigates_and_completes_microworld():
     agent = MyAgent(game_id="microworld_test")
 
     max_steps = 30
-    for step in range(1, max_steps + 1):
+    for _step in range(1, max_steps + 1):
         if agent.is_done(env.frame, env):
             break
         act = agent.choose_action(env.frame, env)

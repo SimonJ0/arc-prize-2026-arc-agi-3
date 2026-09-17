@@ -2,11 +2,9 @@
 Unit tests for the Cryptographic Iron Rule submission gate.
 """
 
-from pathlib import Path
 import pytest
-import sys
 
-from src.submit.submission_gate import SubmissionAuthorizationGate, compute_file_sha256
+from src.submit.submission_gate import SubmissionAuthorizationGate
 
 
 def test_build_submission_hash_output(tmp_path):
@@ -41,8 +39,11 @@ def test_submit_fails_closed_on_expired_token():
     gate = SubmissionAuthorizationGate()
     # Expired timestamp: 2020-01-01
     payload = "TEST-EXP|hash1|commit|cfg|eval|2020-01-01T00:00:00+00:00"
-    import hmac, hashlib
+    import hashlib
+    import hmac
+
     from src.submit.submission_gate import SECRET_SALT
+
     sig = hmac.new(SECRET_SALT, payload.encode("utf-8"), hashlib.sha256).hexdigest()
     expired_token = f"{payload}||{sig}"
 

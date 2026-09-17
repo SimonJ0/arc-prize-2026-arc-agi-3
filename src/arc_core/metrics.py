@@ -11,7 +11,7 @@ Matches the official ARC-AGI-3 scoring methodology:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+
 import numpy as np
 
 
@@ -20,7 +20,7 @@ class LevelMetric:
     level_index: int
     completed: bool
     actions_taken: int
-    baseline_actions: Optional[int] = None
+    baseline_actions: int | None = None
 
     @property
     def level_score(self) -> float:
@@ -30,13 +30,13 @@ class LevelMetric:
         if self.baseline_actions is None or self.baseline_actions <= 0:
             return 1.0  # Fallback completion indicator
         ratio = self.baseline_actions / self.actions_taken
-        return float(min(1.15, ratio ** 2))
+        return float(min(1.15, ratio**2))
 
 
 @dataclass
 class EnvironmentEvaluation:
     game_id: str
-    levels: List[LevelMetric] = field(default_factory=list)
+    levels: list[LevelMetric] = field(default_factory=list)
     resets: int = 0
 
     @property
@@ -47,7 +47,7 @@ class EnvironmentEvaluation:
     def total_actions(self) -> int:
         return sum(lvl.actions_taken for lvl in self.levels)
 
-    def compute_rhae(self) -> Dict[str, float]:
+    def compute_rhae(self) -> dict[str, float]:
         """
         Computes exact official RHAE environment score.
         Returns:
@@ -83,7 +83,7 @@ class EnvironmentEvaluation:
             "resets": self.resets,
         }
 
-    def compute_local_proxies(self) -> Dict[str, float]:
+    def compute_local_proxies(self) -> dict[str, float]:
         """
         Computes proxy performance metrics when human baseline actions are unknown.
         Prioritizes level depth, completion rate, action efficiency, and low resets.
@@ -107,7 +107,7 @@ class EnvironmentEvaluation:
         }
 
 
-def compute_benchmark_rhae(evaluations: List[EnvironmentEvaluation]) -> float:
+def compute_benchmark_rhae(evaluations: list[EnvironmentEvaluation]) -> float:
     """Computes aggregate benchmark RHAE: T = (1 / |D|) * sum(E_e)."""
     if not evaluations:
         return 0.0

@@ -6,11 +6,13 @@ The notebook follows the exact pattern used by Kaggle's official ARC-AGI-3 start
   Cell 3: in competition rerun, wait for gateway sidecar, wire framework, and run
   Cell 4: in commit / save-and-run-all, write dummy submission.parquet
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 from textwrap import dedent
+
 import nbformat
 
 ACCELERATOR = "t4"
@@ -197,7 +199,9 @@ def main() -> None:
     NOTEBOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
     nb_dict = build()
     NOTEBOOK_PATH.write_text(json.dumps(nb_dict, indent=1), encoding="utf-8")
-    print(f"[build_notebook] Successfully generated and validated {NOTEBOOK_PATH.relative_to(ROOT)}")
+    print(
+        f"[build_notebook] Successfully generated and validated {NOTEBOOK_PATH.relative_to(ROOT)}"
+    )
 
     # Sync kernel-metadata.json
     if METADATA_PATH.exists():

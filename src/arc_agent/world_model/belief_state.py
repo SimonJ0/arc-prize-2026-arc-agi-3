@@ -5,16 +5,17 @@ Tracks 1-step prediction accuracy and explicitly falsifies hypotheses upon contr
 Only authorizes deep planning when model consensus and fidelity meet confidence thresholds.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any
+
 import numpy as np
 
+from src.arc_agent.perception.layered_perception import FrameAnalysis
 from src.arc_core.contracts import (
     Observation,
     Transition,
     TransitionModelHypothesis,
     WorldModelBelief,
 )
-from src.arc_agent.perception.layered_perception import FrameAnalysis
 
 
 class BeliefStateWorldModel:
@@ -38,11 +39,11 @@ class BeliefStateWorldModel:
     def __init__(self):
         self.belief = WorldModelBelief()
         self._init_hypotheses()
-        self.avatar_color: Optional[int] = None
+        self.avatar_color: int | None = None
         self.solid_colors: set[int] = set()
         # Empirical Transition Dynamics Learning
         # action -> {attempts: int, displacements: { (dy,dx): count }, blocked: int, dominant: (dy,dx), fidelity: float}
-        self.action_stats: Dict[str, Dict[str, Any]] = {}
+        self.action_stats: dict[str, dict[str, Any]] = {}
 
     def _init_hypotheses(self):
         """Initializes candidate transition dynamics hypotheses."""
@@ -75,7 +76,7 @@ class BeliefStateWorldModel:
             return True
         return False
 
-    def get_action_displacement(self, action: str) -> Optional[Tuple[int, int]]:
+    def get_action_displacement(self, action: str) -> tuple[int, int] | None:
         """Returns empirical or top-hypothesis displacement vector for action."""
         stats = self.action_stats.get(action)
         if stats and stats["dominant"] is not None and self.is_action_verified(action):
@@ -96,7 +97,7 @@ class BeliefStateWorldModel:
         }
         return default_deltas.get(action)
 
-    def can_reliably_plan(self, action: Optional[str] = None) -> bool:
+    def can_reliably_plan(self, action: str | None = None) -> bool:
         """
         Gating check: Deep forward planning is authorized ONLY when
         sufficient evidence confirms high predictive fidelity.
@@ -196,6 +197,8 @@ class BeliefStateWorldModel:
         self, action: str, prev_frame: np.ndarray, curr_frame: np.ndarray
     ):
         """Validates predicted movement of the avatar against observed frame displacement."""
+        if self.avatar_color is None:
+            return
         prev_pos = self._find_entity_centroid(prev_frame, self.avatar_color)
         curr_pos = self._find_entity_centroid(curr_frame, self.avatar_color)
 
@@ -238,9 +241,7 @@ class BeliefStateWorldModel:
                     if hyp.evidence_count >= 2 and hyp.accuracy() < 0.3:
                         hyp.falsified = True
 
-    def _find_entity_centroid(
-        self, frame: np.ndarray, color: int
-    ) -> Optional[Tuple[float, float]]:
+    def _find_entity_centroid(self, frame: np.ndarray, color: int) -> tuple[float, float] | None:
         coords = np.argwhere(frame == color)
         if len(coords) == 0:
             return None
@@ -265,8 +266,8 @@ class BeliefStateWorldModel:
         self.belief.one_step_accuracy = (total_corr / total_ev) if total_ev > 0 else 0.0
 
     def predict_next_avatar_pos(
-        self, curr_pos: Tuple[int, int], action: str
-    ) -> Optional[Tuple[int, int]]:
+        self, curr_pos: tuple[int, int], action: str
+    ) -> tuple[int, int] | None:
         """Predicts next avatar position under verified empirical displacement or top hypothesis."""
         disp = self.get_action_displacement(action)
         if disp is not None:
