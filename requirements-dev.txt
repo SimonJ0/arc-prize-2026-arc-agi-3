@@ -1,0 +1,22 @@
+# ==============================================================================
+# ARC-AGI-3 Agent Development & Benchmarking Dependencies
+# ==============================================================================
+-r requirements.txt
+
+# Testing & Quality
+pytest>=8.3.0
+mypy>=1.14.0
+ruff>=0.9.0
+
+# Stubs
+types-PyYAML>=6.0.12
+types-requests>=2.31.0
+
+# Notebook & Kaggle Deployment
+kaggle>=1.6.17
+nbformat>=5.10.4
+pandas>=2.2.0
+
+# Optional Classical ML Baselines
+scikit-learn>=1.5.0
+lightgbm>=4.5.0
