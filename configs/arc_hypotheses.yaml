@@ -75,4 +75,42 @@ hypotheses:
       enable_exact_goal_traversal: true
       guard_plan_falsification: true
 
+  - id: HA_latent_world_model
+    name: "latent_world_model"
+    description: >-
+      End-to-end discrete latent dynamics model with CNN/MLP grid encoder,
+      residual transition model, value head, and latent MCTS rollouts.
+    parameters:
+      latent_dim: 32
+      mcts_simulations: 15
+      mcts_depth: 5
 
+  - id: HB_object_dsl_program_induction
+    name: "object_dsl_program_induction"
+    description: >-
+      Object-centric domain-specific language engine with connected-component
+      extraction, program induction over transformation primitives, and A* planning.
+    parameters:
+      max_program_length: 4
+      beam_width: 5
+      entity_min_size: 1
+
+  - id: HC_epistemic_curiosity_rnd
+    name: "epistemic_curiosity_rnd"
+    description: >-
+      Random Network Distillation (RND) prediction error driven exploration with
+      fixed target projection, online predictor gradient steps, and delta latching.
+    parameters:
+      feature_dim: 32
+      learning_rate: 0.01
+      novelty_weight: 1.0
+
+  - id: HD_hypothesis_driven_neuro_symbolic
+    name: "hypothesis_driven_neuro_symbolic"
+    description: >-
+      Dynamic Entity Parser with Bayesian Symbolic Hypothesizer over causal mechanics,
+      two-phase Epistemic Tree Search (information-seeking probes then shortest-path exploitation).
+    parameters:
+      exploration_probe_budget: 12
+      confidence_threshold: 0.85
+      max_planning_depth: 50

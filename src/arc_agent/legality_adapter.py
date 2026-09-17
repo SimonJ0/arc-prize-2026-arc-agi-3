@@ -92,10 +92,22 @@ class LegalityAdapter:
             return action_name, sanitized_payload
 
     @classmethod
-    def to_game_action(cls, action_str: str) -> GameAction:
-        """Converts string action to arcengine GameAction enum."""
+    def to_game_action(
+        cls, action_str: str, payload: dict[str, Any] | None = None
+    ) -> GameAction:
+        """Converts string action to arcengine GameAction enum, setting data for complex actions."""
         key = action_str.upper().split(".")[-1]
         try:
-            return GameAction.from_name(key)
+            action = GameAction.from_name(key)
         except Exception:
-            return GameAction.RESET
+            action = GameAction.RESET
+
+        if payload:
+            if action == GameAction.ACTION6:
+                x = int(payload.get("x", 0))
+                y = int(payload.get("y", 0))
+                action.set_data({"x": x, "y": y})
+            if "reasoning" in payload:
+                setattr(action, "reasoning", payload["reasoning"])
+
+        return action

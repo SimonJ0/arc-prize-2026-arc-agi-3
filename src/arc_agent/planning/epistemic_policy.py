@@ -17,6 +17,8 @@ from src.arc_agent.legality_adapter import LegalityAdapter
 from src.arc_agent.memory.reasoning_state import PersistentReasoningState
 from src.arc_agent.perception.cognitive_hierarchy import CognitiveHierarchyAnalysis
 from src.arc_agent.perception.layered_perception import FrameAnalysis
+from src.arc_agent.reasoning.action_algebra import ActionAlgebraEngine
+from src.arc_agent.reasoning.model_gate import ModelGate, ModelUseDecision
 from src.arc_agent.world_model.belief_state import BeliefStateWorldModel
 from src.arc_core.contracts import DecisionTrace, Observation
 
@@ -26,6 +28,9 @@ class EpistemicPolicy:
 
     def __init__(self):
         self.step_counter = 0
+        self.algebra = ActionAlgebraEngine()
+        self.model_gate = ModelGate()
+        self.recent_coords: deque[tuple[int, int]] = deque(maxlen=6)
 
     def select_action(
         self,
@@ -34,6 +39,7 @@ class EpistemicPolicy:
         world_model: BeliefStateWorldModel,
         reasoning_state: PersistentReasoningState | None = None,
         cognitive_analysis: CognitiveHierarchyAnalysis | None = None,
+        structured_belief: Any | None = None,
     ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """
         Selects next physical environment action given current belief state.
@@ -86,6 +92,20 @@ class EpistemicPolicy:
                     reasoning_state.falsify_goal(g)
                 elif is_loop:
                     reasoning_state.falsify_goal(g)
+
+        # Model-Use Gate: Determine execution strategy (direct vs simulation vs probe)
+        has_plan = bool(reasoning_state and reasoning_state.has_active_plan())
+        can_plan = world_model.can_reliably_plan()
+        has_exploit = False
+        if structured_belief is not None and hasattr(structured_belief, "mechanisms"):
+            has_exploit = len(structured_belief.mechanisms.get_exploitable_controllers()) > 0
+
+        model_decision = self.model_gate.evaluate_decision(
+            has_active_plan=has_plan,
+            can_reliably_plan=can_plan,
+            has_exploitable_controller=has_exploit,
+            is_loop=is_loop,
+        )
 
         # 2. Reasoning Persistence: Check if there is an active macro-plan in flight (and not in deadlock loop)
         if reasoning_state is not None and reasoning_state.has_active_plan() and not is_loop:
@@ -176,7 +196,7 @@ class EpistemicPolicy:
 
         # 5. Epistemic Probing Mode / Deadlock Breaker
         action, payload, trace = self._select_epistemic_probe(
-            observation, analysis, world_model, reasoning_state, is_loop
+            observation, analysis, world_model, reasoning_state, is_loop, structured_belief
         )
         if reasoning_state is not None and p_pos is not None:
             reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
@@ -189,6 +209,7 @@ class EpistemicPolicy:
         world_model: BeliefStateWorldModel,
         reasoning_state: PersistentReasoningState | None = None,
         is_loop: bool = False,
+        structured_belief: Any | None = None,
     ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """Selects informative probe action to distinguish candidate transition models or break deadlocks."""
         available = list(observation.available_actions)
@@ -216,26 +237,96 @@ class EpistemicPolicy:
 
         payload = {}
         if selected == "ACTION6":
-            # Bounded coordinate selection: choose entity centroid clamped to [0, 63]
+            # Update action algebra from mechanism transition ledger if available
+            if structured_belief is not None and hasattr(structured_belief, "mechanisms"):
+                self.algebra.update_from_records(structured_belief.mechanisms.records)
+
+            # Affordance-driven coordinate selection
+            last_coord = getattr(reasoning_state, "last_affordance_coord", None) if reasoning_state else None
+            last_diff = getattr(reasoning_state, "last_affordance_diff", 0) if reasoning_state else 0
+            repeat_count = getattr(reasoning_state, "affordance_repeat_count", 0) if reasoning_state else 0
+            lethal_set = getattr(reasoning_state, "lethal_affordances", set()) if reasoning_state else set()
+            inert_set = getattr(reasoning_state, "inert_affordances", set()) if reasoning_state else set()
+            active_list = getattr(reasoning_state, "active_affordances", []) if reasoning_state else []
+
+            # 1. Filter entities: compact play entities (avoiding huge obstacle blobs and letterbox/UI bounds)
+            cands = []
             if analysis.entities:
-                play_entities = [
+                for e in analysis.entities:
+                    cy, cx = int(round(e.centroid[0])), int(round(e.centroid[1]))
+                    # Discard letterbox border pixels and top UI indicator rows (cy <= 1)
+                    if not (2 <= cy <= 61 and 2 <= cx <= 61):
+                        continue
+                    if e.size > 120:  # Massive entities are obstacles or static backgrounds
+                        continue
+                    if (cy, cx) in lethal_set:
+                        continue
+                    cands.append(e)
+
+            chosen_coord: tuple[int, int] | None = None
+
+            # 2. Decision logic:
+            # Check mechanism confidence vs goal relevance before repeating active controller
+            mech_permits_exploit = True
+            if structured_belief is not None and hasattr(structured_belief, "mechanisms") and last_coord:
+                hyp = structured_belief.mechanisms.get_hypothesis(last_coord)
+                if hyp is not None and not hyp.can_reliably_exploit():
+                    mech_permits_exploit = False
+
+            if last_coord is not None and last_diff > 2 and repeat_count < 5 and last_coord not in lethal_set and mech_permits_exploit:
+                chosen_coord = last_coord
+            elif cands:
+                # Prioritize candidates not confirmed inert by coordinate
+                non_inert = [
                     e
-                    for e in analysis.entities
-                    if 1 < int(e.centroid[0]) < 62 and 1 < int(e.centroid[1]) < 62
+                    for e in cands
+                    if (int(round(e.centroid[0])), int(round(e.centroid[1]))) not in inert_set
                 ]
-                pool = play_entities if play_entities else analysis.entities
-                target_ent = pool[self.step_counter % len(pool)]
-                cy, cx = target_ent.centroid
-                payload = {
-                    "x": int(np.clip(cx, 0, 63)),
-                    "y": int(np.clip(cy, 0, 63)),
-                }
+                # B3.04: Causal equivalence class filtering (prune entire classes of inert entities)
+                if structured_belief is not None and hasattr(structured_belief, "mechanisms"):
+                    non_inert = structured_belief.mechanisms.filter_inert_classes(non_inert)
+
+                pool = non_inert if non_inert else cands
+                # Filter out oscillating inverse actions
+                coords_pool = [(int(round(e.centroid[0])), int(round(e.centroid[1]))) for e in pool]
+                pruned_coords = self.algebra.filter_oscillating_actions(coords_pool, list(self.recent_coords))
+                cands_to_score = [
+                    e
+                    for e in pool
+                    if (int(round(e.centroid[0])), int(round(e.centroid[1]))) in set(pruned_coords)
+                ] or pool
+
+                # B3.11: RHAE-aware utility ranking U(a) = αG + βI + γC - λK - μR
+                cand_scores = [
+                    (
+                        e,
+                        self._compute_action_utility(
+                            coord=(int(round(e.centroid[0])), int(round(e.centroid[1]))),
+                            entity=e,
+                            structured_belief=structured_belief,
+                            reasoning_state=reasoning_state,
+                        ),
+                    )
+                    for e in cands_to_score
+                ]
+                max_u = max(s[1] for s in cand_scores)
+                top_cands = [s[0] for s in cand_scores if abs(s[1] - max_u) < 0.05]
+                best_ent = top_cands[self.step_counter % len(top_cands)]
+                chosen_coord = (int(round(best_ent.centroid[0])), int(round(best_ent.centroid[1])))
+            elif active_list:
+                pruned_active = self.algebra.filter_oscillating_actions(active_list, list(self.recent_coords))
+                chosen_coord = (pruned_active or active_list)[self.step_counter % len(pruned_active or active_list)]
             else:
                 H, W = analysis.frame_shape
-                payload = {
-                    "x": int(np.clip(W // 2, 0, 63)),
-                    "y": int(np.clip(H // 2, 0, 63)),
-                }
+                chosen_coord = (int(np.clip(H // 2, 0, 63)), int(np.clip(W // 2, 0, 63)))
+
+            if chosen_coord is not None:
+                self.recent_coords.append(chosen_coord)
+
+            payload = {
+                "x": int(np.clip(chosen_coord[1], 0, 63)),
+                "y": int(np.clip(chosen_coord[0], 0, 63)),
+            }
 
         action, valid_payload = LegalityAdapter.validate_action(
             state=observation.state,
@@ -256,6 +347,40 @@ class EpistemicPolicy:
             confidence=0.5,
         )
         return action, valid_payload, trace
+
+    def _compute_action_utility(
+        self,
+        coord: tuple[int, int],
+        entity: Any,
+        structured_belief: Any | None,
+        reasoning_state: PersistentReasoningState | None,
+    ) -> float:
+        """
+        Computes action utility: U(a) = α*G(a) + β*I(a) + γ*C(a) - λ*K(a) - μ*R(a)
+        Maximizes goal progress and information gain while penalizing action cost and risk.
+        """
+        G = 0.5
+        C = 0.5
+        I = 1.0
+        R = 0.0
+        K = 1.0
+
+        if structured_belief is not None and hasattr(structured_belief, "mechanisms"):
+            hyp = structured_belief.mechanisms.get_hypothesis(coord)
+            if hyp is not None:
+                G = hyp.goal_relevance
+                C = hyp.causal_confidence
+                I = 1.0 / (hyp.observations + 1.0)
+                if hyp.is_lethal:
+                    R = 1.0
+            else:
+                I = 1.0
+
+        if reasoning_state is not None and coord in reasoning_state.death_coords:
+            R = 1.0
+
+        # Weights: α=3.5 (goal progress), β=1.0 (information gain), γ=1.0 (causal confidence), λ=0.5 (action cost), μ=5.0 (risk)
+        return 3.5 * G + 1.0 * I + 1.0 * C - 0.5 * K - 5.0 * R
 
     def _plan_goal_trajectory(
         self,

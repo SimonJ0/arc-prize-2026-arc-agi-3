@@ -58,7 +58,9 @@ class SubmissionAuthorizationGate:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         self.notebooks_dir = ROOT / notebooks_dir
         self.notebook_path = self.notebooks_dir / "submission.ipynb"
-        self.config_path = ROOT / "configs" / "default_config.yaml"
+        self.config_path = ROOT / "configs" / "arc_hypotheses.yaml"
+        if not self.config_path.exists():
+            self.config_path = ROOT / "configs" / "default_config.yaml"
         if not self.config_path.exists():
             self.config_path = ROOT / "configs" / "arc_default_config.yaml"
 

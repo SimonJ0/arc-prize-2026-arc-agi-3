@@ -14,6 +14,8 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.arc_agent.memory.effect_taxonomy import EffectType, classify_effect
+
 
 @dataclass(frozen=True)
 class StepSummary:
@@ -61,6 +63,15 @@ class PersistentReasoningState:
     last_predicted_pos: tuple[int, int] | None = None
     falsified_goals: set[tuple[int, int]] = field(default_factory=set)
     current_level: int = 1
+
+    # 7. Coordinate Affordance Memory (ACTION6)
+    active_affordances: list[tuple[int, int]] = field(default_factory=list)
+    inert_affordances: set[tuple[int, int]] = field(default_factory=set)
+    lethal_affordances: set[tuple[int, int]] = field(default_factory=set)
+    last_affordance_coord: tuple[int, int] | None = None
+    last_affordance_diff: int = 0
+    affordance_repeat_count: int = 0
+    last_effect_type: EffectType | None = None
 
     def has_active_plan(self) -> bool:
         """Returns True if there is a pending macro-action sequence."""
@@ -132,6 +143,48 @@ class PersistentReasoningState:
         if (dy, dx) != (0, 0):
             self.action_effects[action] = (dy, dx)
 
+    def register_affordance_result(
+        self,
+        coord: tuple[int, int],
+        diff_count: int,
+        is_lethal: bool = False,
+        state_str: str = "NOT_FINISHED",
+        level_advanced: bool = False,
+        effect_type: EffectType | None = None,
+    ):
+        """Registers the causal outcome of clicking coordinate (y, x)."""
+        self.last_affordance_coord = coord
+        self.last_affordance_diff = diff_count
+
+        if effect_type is None:
+            effect_type = classify_effect(
+                diff_count=diff_count,
+                state=state_str,
+                level_advanced=level_advanced,
+                is_lethal=is_lethal,
+            )
+        self.last_effect_type = effect_type
+
+        if effect_type == EffectType.GAME_OVER:
+            self.lethal_affordances.add(coord)
+            if coord in self.active_affordances:
+                self.active_affordances.remove(coord)
+            self.affordance_repeat_count = 0
+            return
+
+        if effect_type in (EffectType.NONE, EffectType.UI_NOISE):
+            self.inert_affordances.add(coord)
+            if coord in self.active_affordances:
+                self.active_affordances.remove(coord)
+            self.affordance_repeat_count = 0
+        else:
+            # Genuine multi-pixel board transformation confirmed (LOCAL_MUTATION, STRUCTURAL_MUTATION, GLOBAL_MUTATION, LEVEL_ADVANCE)
+            if coord not in self.active_affordances:
+                self.active_affordances.append(coord)
+            if coord in self.inert_affordances:
+                self.inert_affordances.remove(coord)
+            self.affordance_repeat_count += 1
+
     def reset_level(self, new_level: int):
         """
         Resets level-scoped working memory upon level transition.
@@ -144,6 +197,13 @@ class PersistentReasoningState:
         self.visitation_counts.clear()
         self.visited_positions.clear()
         self.last_predicted_pos = None
+        self.active_affordances.clear()
+        self.inert_affordances.clear()
+        self.lethal_affordances.clear()
+        self.last_affordance_coord = None
+        self.last_affordance_diff = 0
+        self.affordance_repeat_count = 0
+        self.last_effect_type = None
 
 
 class ContextCompactor:

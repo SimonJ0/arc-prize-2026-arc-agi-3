@@ -75,3 +75,13 @@ def test_legality_adapter_strips_coordinates_for_simple_actions():
     assert action == "ACTION1"
     assert "x" not in payload
     assert "y" not in payload
+
+
+def test_legality_adapter_action6_set_data():
+    from arcengine import GameAction
+
+    action = LegalityAdapter.to_game_action("ACTION6", {"x": 15, "y": 25})
+    assert action == GameAction.ACTION6
+    data = action.action_data
+    assert data.x == 15
+    assert data.y == 25

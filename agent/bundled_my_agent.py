@@ -9,19 +9,13 @@ import time
 import json
 import random
 import hashlib
-from collections import deque
+from enum import Enum
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import numpy as np
 from scipy.ndimage import label
 from arcengine import GameAction, GameState, FrameDataRaw
-
-try:
-    from agents.agent import Agent
-except ImportError:
-    class Agent:  # type: ignore[no-redef]
-        def __init__(self, game_id: str = "default_game", *args: Any, **kwargs: Any):
-            self.game_id = game_id
 
 
 # ======================================================================
@@ -243,13 +237,1557 @@ class LegalityAdapter:
             return action_name, sanitized_payload
 
     @classmethod
-    def to_game_action(cls, action_str: str) -> GameAction:
-        """Converts string action to arcengine GameAction enum."""
+    def to_game_action(
+        cls, action_str: str, payload: dict[str, Any] | None = None
+    ) -> GameAction:
+        """Converts string action to arcengine GameAction enum, setting data for complex actions."""
         key = action_str.upper().split(".")[-1]
         try:
-            return GameAction.from_name(key)
+            action = GameAction.from_name(key)
         except Exception:
-            return GameAction.RESET
+            action = GameAction.RESET
+
+        if payload:
+            if action == GameAction.ACTION6:
+                x = int(payload.get("x", 0))
+                y = int(payload.get("y", 0))
+                action.set_data({"x": x, "y": y})
+            if "reasoning" in payload:
+                setattr(action, "reasoning", payload["reasoning"])
+
+        return action
+
+# ======================================================================
+# INLINED: replay_logger.py
+# ======================================================================
+
+"""
+ARC-AGI-3 Step-Level Replay Diagnostic Logger.
+Instruments agent execution to capture:
+1. Per-step observations, predictions, and decomposed prediction errors.
+2. Active hypothesis distributions P(H_i).
+3. Action rationale and risk tiers (Levels 0-5).
+4. Deadlock classifications (Types 1-6).
+5. Automated post-hoc failure attribution (8-tier taxonomy).
+"""
+
+
+import json
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[3]
+
+
+class ActionRiskTier(int, Enum):
+    LEVEL_0_SAFE_OBSERVATION = 0
+    LEVEL_1_REVERSIBLE_MOVE = 1
+    LEVEL_2_LOW_RISK_PROBE = 2
+    LEVEL_3_ACTIVE_INTERVENTION = 3
+    LEVEL_4_IRREVERSIBLE_ACTION = 4
+    LEVEL_5_GOAL_COMMITMENT = 5
+
+
+class FailureTaxonomy(str, Enum):
+    PERCEPTION_FAILURE = "PERCEPTION_FAILURE"
+    MODEL_FAILURE = "MODEL_FAILURE"
+    GOAL_FAILURE = "GOAL_FAILURE"
+    EXPLORATION_FAILURE = "EXPLORATION_FAILURE"
+    PLANNING_FAILURE = "PLANNING_FAILURE"
+    EXECUTION_FAILURE = "EXECUTION_FAILURE"
+    MEMORY_FAILURE = "MEMORY_FAILURE"
+    TRANSFER_FAILURE = "TRANSFER_FAILURE"
+    SUCCESS = "SUCCESS"
+
+
+@dataclass
+class PredictionError:
+    """Structured decomposed prediction error vector."""
+    position_error: float = 0.0
+    appearance_error: float = 0.0
+    disappearance_error: float = 0.0
+    color_error: float = 0.0
+    collision_error: float = 0.0
+    goal_progress_error: float = 0.0
+
+    @property
+    def total_magnitude(self) -> float:
+        return float(
+            np.sqrt(
+                self.position_error**2
+                + self.appearance_error**2
+                + self.disappearance_error**2
+                + self.color_error**2
+                + self.collision_error**2
+                + self.goal_progress_error**2
+            )
+        )
+
+    def to_dict(self) -> dict[str, float]:
+        d = asdict(self)
+        d["total_magnitude"] = round(self.total_magnitude, 4)
+        return d
+
+
+@dataclass
+class StepReplayRecord:
+    """Detailed per-step telemetry record."""
+    step: int
+    level: int
+    observation_hash: str
+    action: str
+    payload: dict[str, Any]
+    risk_tier: int
+    rationale: str
+    predicted_avatar_pos: tuple[int, int] | None
+    actual_avatar_pos: tuple[int, int] | None
+    prediction_error: PredictionError
+    active_hypotheses: dict[str, float]  # hypothesis_id -> posterior
+    active_goal: tuple[int, int] | None
+    goal_confidence: float
+    deadlock_type: str | None = None
+    state: str = "NOT_FINISHED"
+    levels_completed: int = 0
+    decision_latency_ms: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "step": self.step,
+            "level": self.level,
+            "observation_hash": self.observation_hash,
+            "action": self.action,
+            "payload": self.payload,
+            "risk_tier": self.risk_tier,
+            "rationale": self.rationale,
+            "predicted_avatar_pos": self.predicted_avatar_pos,
+            "actual_avatar_pos": self.actual_avatar_pos,
+            "prediction_error": self.prediction_error.to_dict(),
+            "active_hypotheses": {k: round(v, 4) for k, v in self.active_hypotheses.items()},
+            "active_goal": self.active_goal,
+            "goal_confidence": round(self.goal_confidence, 4),
+            "deadlock_type": self.deadlock_type,
+            "state": self.state,
+            "levels_completed": self.levels_completed,
+            "decision_latency_ms": round(self.decision_latency_ms, 2),
+        }
+
+
+class ReplayLogger:
+    """Captures, serializes, and analyzes execution replays for diagnostic feedback."""
+
+    def __init__(self, game_id: str, output_dir: str = "reports/replays"):
+        self.game_id = game_id
+        self.output_dir = ROOT / output_dir
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.records: list[StepReplayRecord] = []
+        self.start_time = datetime.now(timezone.utc)
+        self.hypotheses_falsified = 0
+        self.goals_falsified = 0
+        self.deadlocks_encountered = 0
+
+    def log_step(
+        self,
+        step: int,
+        level: int,
+        observation_hash: str,
+        action: str,
+        payload: dict[str, Any],
+        risk_tier: int = ActionRiskTier.LEVEL_1_REVERSIBLE_MOVE.value,
+        rationale: str = "epistemic_probe",
+        predicted_avatar_pos: tuple[int, int] | None = None,
+        actual_avatar_pos: tuple[int, int] | None = None,
+        prediction_error: PredictionError | None = None,
+        active_hypotheses: dict[str, float] | None = None,
+        active_goal: tuple[int, int] | None = None,
+        goal_confidence: float = 0.5,
+        deadlock_type: str | None = None,
+        state: str = "NOT_FINISHED",
+        levels_completed: int = 0,
+        decision_latency_ms: float = 0.0,
+    ) -> StepReplayRecord:
+        record = StepReplayRecord(
+            step=step,
+            level=level,
+            observation_hash=observation_hash,
+            action=action,
+            payload=payload,
+            risk_tier=risk_tier,
+            rationale=rationale,
+            predicted_avatar_pos=predicted_avatar_pos,
+            actual_avatar_pos=actual_avatar_pos,
+            prediction_error=prediction_error or PredictionError(),
+            active_hypotheses=active_hypotheses or {},
+            active_goal=active_goal,
+            goal_confidence=goal_confidence,
+            deadlock_type=deadlock_type,
+            state=state,
+            levels_completed=levels_completed,
+            decision_latency_ms=decision_latency_ms,
+        )
+        self.records.append(record)
+        if deadlock_type:
+            self.deadlocks_encountered += 1
+        return record
+
+    def classify_failure(
+        self,
+        final_state: str,
+        total_actions: int,
+        max_actions: int,
+        levels_completed: int,
+        initial_levels_completed: int = 0,
+    ) -> FailureTaxonomy:
+        """Determines the primary failure root cause using execution evidence."""
+        if final_state in ("WIN", "GameState.WIN") or levels_completed > initial_levels_completed:
+            return FailureTaxonomy.SUCCESS
+
+        if not self.records:
+            return FailureTaxonomy.PERCEPTION_FAILURE
+
+        # 1. Check for perceptual failure: avatar position was never detected
+        detected_avatar = any(r.actual_avatar_pos is not None for r in self.records)
+        if not detected_avatar:
+            return FailureTaxonomy.PERCEPTION_FAILURE
+
+        # 2. Check for memory / transfer failure across level advancement
+        if initial_levels_completed > 0 and levels_completed == initial_levels_completed:
+            return FailureTaxonomy.TRANSFER_FAILURE
+
+        # 3. Check for execution / planning failure (frequent collisions or deadlocks)
+        deadlock_ratio = self.deadlocks_encountered / max(1, len(self.records))
+        if deadlock_ratio > 0.35:
+            return FailureTaxonomy.PLANNING_FAILURE
+
+        # 4. Check for high model prediction error
+        mean_pred_error = float(
+            np.mean([r.prediction_error.total_magnitude for r in self.records])
+        )
+        if mean_pred_error > 1.5:
+            return FailureTaxonomy.MODEL_FAILURE
+
+        # 5. Check if goals were constantly falsified without progress
+        if self.goals_falsified >= 4:
+            return FailureTaxonomy.GOAL_FAILURE
+
+        # 6. Default to exploration exhaustion
+        if total_actions >= max_actions:
+            return FailureTaxonomy.EXPLORATION_FAILURE
+
+        return FailureTaxonomy.EXECUTION_FAILURE
+
+    def save_replay(
+        self,
+        final_state: str = "NOT_FINISHED",
+        levels_completed: int = 0,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> Path:
+        """Saves JSONL replay file with structured diagnostics."""
+        timestamp_str = self.start_time.strftime("%Y%m%d_%H%M%S")
+        safe_game_id = self.game_id.replace("/", "_").replace("\\", "_")
+        replay_path = self.output_dir / f"{safe_game_id}_{timestamp_str}.jsonl"
+
+        failure_cause = self.classify_failure(
+            final_state=final_state,
+            total_actions=len(self.records),
+            max_actions=len(self.records),
+            levels_completed=levels_completed,
+        )
+
+        metadata = {
+            "game_id": self.game_id,
+            "timestamp": self.start_time.isoformat(),
+            "total_steps": len(self.records),
+            "levels_completed": levels_completed,
+            "final_state": final_state,
+            "failure_taxonomy": failure_cause.value,
+            "deadlocks_count": self.deadlocks_encountered,
+            "hypotheses_falsified": self.hypotheses_falsified,
+            "goals_falsified": self.goals_falsified,
+        }
+        if extra_metadata:
+            metadata.update(extra_metadata)
+
+        with open(replay_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"_metadata": metadata}) + "\n")
+            for r in self.records:
+                f.write(json.dumps(r.to_dict()) + "\n")
+
+        return replay_path
+
+# ======================================================================
+# INLINED: effect_taxonomy.py
+# ======================================================================
+
+"""
+Structured Effect Taxonomy for ARC-AGI-3 (Baseline 3.0).
+Replaces coarse binary delta threshold (diff_count > 2) with a rich 8-class taxonomy:
+  NONE, UI_NOISE, LOCAL_MUTATION, STRUCTURAL_MUTATION, GLOBAL_MUTATION,
+  DELAYED_EFFECT, LEVEL_ADVANCE, GAME_OVER.
+"""
+
+
+from enum import Enum
+
+
+class EffectType(str, Enum):
+    """Classification of state transition consequences."""
+
+    NONE = "NONE"                          # Δ == 0: no observable effect
+    UI_NOISE = "UI_NOISE"                  # 0 < Δ <= 2: counter tick, animation flicker
+    LOCAL_MUTATION = "LOCAL_MUTATION"      # 2 < Δ <= 20: single object/handle changed
+    STRUCTURAL_MUTATION = "STRUCTURAL"     # 20 < Δ <= 100: board geometry / puzzle rotation
+    GLOBAL_MUTATION = "GLOBAL_MUTATION"    # Δ > 100: massive multi-object transformation / clear
+    DELAYED_EFFECT = "DELAYED_EFFECT"      # Δ == 0 immediately, consequence manifests later
+    LEVEL_ADVANCE = "LEVEL_ADVANCE"        # Goal condition met, advancing level
+    GAME_OVER = "GAME_OVER"               # Terminal failure, lethal trap, or collision quota exceeded
+
+
+# Threshold boundaries
+UI_NOISE_CEIL: int = 2
+LOCAL_CEIL: int = 20
+STRUCTURAL_CEIL: int = 100
+
+
+def classify_effect(
+    diff_count: int,
+    state: str = "NOT_FINISHED",
+    level_advanced: bool = False,
+    is_lethal: bool = False,
+    prev_diff: int = 0,
+) -> EffectType:
+    """
+    Categorizes the observable impact of an action into EffectType.
+
+    Args:
+        diff_count: Number of pixels altered between pre- and post-action observations.
+        state: Environment state string ("NOT_FINISHED", "WIN", "GAME_OVER", etc.).
+        level_advanced: True if this action triggered level advancement.
+        is_lethal: True if the action triggered a lethal obstacle penalty or fatal reset.
+        prev_diff: Diff count from previous step for delayed effect correlation.
+
+    Returns:
+        EffectType enumeration member.
+    """
+    # 1. Terminal / Fatal Outcomes
+    if is_lethal or state in ("GAME_OVER", "GameState.GAME_OVER"):
+        return EffectType.GAME_OVER
+
+    # 2. Level Advancement
+    if level_advanced or state in ("WIN", "GameState.WIN"):
+        return EffectType.LEVEL_ADVANCE
+
+    # 3. Observable pixel delta classification
+    if diff_count == 0:
+        return EffectType.NONE
+
+    if diff_count <= UI_NOISE_CEIL:
+        return EffectType.UI_NOISE
+
+    if diff_count <= LOCAL_CEIL:
+        return EffectType.LOCAL_MUTATION
+
+    if diff_count <= STRUCTURAL_CEIL:
+        return EffectType.STRUCTURAL_MUTATION
+
+    return EffectType.GLOBAL_MUTATION
+
+# ======================================================================
+# INLINED: mechanism_memory.py
+# ======================================================================
+
+"""
+Causal Mechanism Memory for ARC-AGI-3 (Baseline 3.0 B3.02).
+Maintains an indexed ledger of causal interventions, mapping:
+  (EntitySignature, Action) -> (EffectType, LatentVariableDelta, ChangedEntities, Reversibility).
+Enables the agent to infer causal control systems rather than raw coordinate blacklists.
+"""
+
+
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Any
+
+
+
+@dataclass(frozen=True)
+class EntitySignature:
+    """
+    Abstract invariant representation of an entity's structural morphology.
+    Allows transfer and equivalence grouping regardless of transient pixel coordinates.
+    """
+
+    color: int
+    size_bucket: str          # "tiny" (<10), "small" (10-50), "medium" (50-120), "large" (>120)
+    aspect_ratio_bucket: str  # "square" (0.8-1.2), "wide" (>1.2), "tall" (<0.8)
+    solidity_bucket: str      # "solid" (>=0.8), "sparse" (<0.8)
+
+    @classmethod
+    def from_entity(cls, entity: Any) -> EntitySignature:
+        """Constructs an invariant signature from an EntityCandidate or AttributeProfile."""
+        color = getattr(entity, "color", 0)
+        size = getattr(entity, "size", 1)
+
+        # Size bucket
+        if size < 10:
+            size_b = "tiny"
+        elif size <= 50:
+            size_b = "small"
+        elif size <= 120:
+            size_b = "medium"
+        else:
+            size_b = "large"
+
+        # Aspect ratio & solidity
+        bbox = getattr(entity, "bbox", (0, 0, 1, 1))
+        h = max(1, bbox[2] - bbox[0])
+        w = max(1, bbox[3] - bbox[1])
+        ar = w / h
+        if 0.8 <= ar <= 1.2:
+            ar_b = "square"
+        elif ar > 1.2:
+            ar_b = "wide"
+        else:
+            ar_b = "tall"
+
+        bbox_area = max(1, h * w)
+        solidity = size / bbox_area
+        sol_b = "solid" if solidity >= 0.8 else "sparse"
+
+        return cls(
+            color=color,
+            size_bucket=size_b,
+            aspect_ratio_bucket=ar_b,
+            solidity_bucket=sol_b,
+        )
+
+
+@dataclass
+class MechanismRecord:
+    """Detailed record of an intervention outcome in the causal ledger."""
+
+    step: int
+    action: str
+    target_coord: tuple[int, int]
+    target_entity: EntitySignature | None
+    effect_type: EffectType
+    diff_count: int
+    changed_entity_signatures: list[EntitySignature] = field(default_factory=list)
+    latent_variable_id: str | None = None
+    latent_delta: int | None = None
+    level_advanced: bool = False
+    is_lethal: bool = False
+    reversible: bool | None = None
+    inverse_action_coord: tuple[int, int] | None = None
+    pre_frame_hash: str = ""
+    post_frame_hash: str = ""
+
+
+@dataclass
+class MechanismHypothesis:
+    """Separates causal mechanism certainty from goal relevance certainty."""
+
+    mechanism_id: str
+    target_coord: tuple[int, int]
+    entity_signature: EntitySignature | None
+    dominant_effect: EffectType
+    causal_confidence: float = 0.5  # "I know what this interaction does"
+    goal_relevance: float = 0.5     # "I know this interaction predicts winning"
+    observations: int = 0
+    concordant_effects: int = 0
+    progress_correlations: int = 0
+    is_lethal: bool = False
+    reversible: bool = False
+
+    def update(self, effect: EffectType, level_advanced: bool, is_lethal: bool = False):
+        self.observations += 1
+        if is_lethal:
+            self.is_lethal = True
+            self.goal_relevance = 0.0
+            self.causal_confidence = 1.0
+            return
+
+        if effect == self.dominant_effect:
+            self.concordant_effects += 1
+        elif self.concordant_effects == 0:
+            self.dominant_effect = effect
+            self.concordant_effects = 1
+
+        # Causal confidence: how consistently does it produce this effect?
+        self.causal_confidence = (self.concordant_effects + 1.0) / (self.observations + 2.0)
+
+        # Goal relevance: does this effect advance the level or transform structural/global board geometry?
+        if level_advanced or effect in (
+            EffectType.STRUCTURAL_MUTATION,
+            EffectType.GLOBAL_MUTATION,
+            EffectType.LEVEL_ADVANCE,
+        ):
+            self.progress_correlations += 1
+        self.goal_relevance = (self.progress_correlations + 1.0) / (self.observations + 2.0)
+
+    def can_reliably_exploit(self) -> bool:
+        """Only exploit when both mechanism and goal relevance confidence exceed threshold."""
+        return (
+            not self.is_lethal
+            and self.causal_confidence >= 0.60
+            and self.goal_relevance >= 0.50
+        )
+
+
+class MechanismMemory:
+    """
+    Indexed causal transition ledger.
+    Indexes interactions by entity signature, effect type, and spatial coordinates.
+    """
+
+    def __init__(self, max_records: int = 500):
+        self.max_records = max_records
+        self.records: list[MechanismRecord] = []
+        self.signature_to_effects: dict[EntitySignature, list[EffectType]] = defaultdict(list)
+        self.active_controllers: set[tuple[int, int]] = set()
+        self.inert_signatures: set[EntitySignature] = set()
+        self.active_signatures: set[EntitySignature] = set()
+        self.hypotheses: dict[tuple[int, int], MechanismHypothesis] = {}
+
+    def record_transition(
+        self,
+        step: int,
+        action: str,
+        target_coord: tuple[int, int],
+        target_entity: EntitySignature | None,
+        effect_type: EffectType,
+        diff_count: int,
+        changed_entity_signatures: list[EntitySignature] | None = None,
+        latent_variable_id: str | None = None,
+        latent_delta: int | None = None,
+        level_advanced: bool = False,
+        is_lethal: bool = False,
+        pre_frame_hash: str = "",
+        post_frame_hash: str = "",
+    ) -> MechanismRecord:
+        """Appends and indexes a causal transition in the ledger."""
+        rec = MechanismRecord(
+            step=step,
+            action=action,
+            target_coord=target_coord,
+            target_entity=target_entity,
+            effect_type=effect_type,
+            diff_count=diff_count,
+            changed_entity_signatures=changed_entity_signatures or [],
+            latent_variable_id=latent_variable_id,
+            latent_delta=latent_delta,
+            level_advanced=level_advanced,
+            is_lethal=is_lethal,
+            pre_frame_hash=pre_frame_hash,
+            post_frame_hash=post_frame_hash,
+        )
+        self.records.append(rec)
+        if len(self.records) > self.max_records:
+            self.records.pop(0)
+
+        # Indexing
+        if target_entity is not None:
+            self.signature_to_effects[target_entity].append(effect_type)
+
+            if effect_type in (EffectType.NONE, EffectType.UI_NOISE):
+                self.inert_signatures.add(target_entity)
+            elif effect_type in (
+                EffectType.LOCAL_MUTATION,
+                EffectType.STRUCTURAL_MUTATION,
+                EffectType.GLOBAL_MUTATION,
+                EffectType.LEVEL_ADVANCE,
+            ):
+                self.active_signatures.add(target_entity)
+                self.active_controllers.add(target_coord)
+                if target_entity in self.inert_signatures:
+                    self.inert_signatures.remove(target_entity)
+
+        # Update hypothesis for this coordinate
+        if target_coord not in self.hypotheses:
+            self.hypotheses[target_coord] = MechanismHypothesis(
+                mechanism_id=f"mech_{target_coord[0]}_{target_coord[1]}",
+                target_coord=target_coord,
+                entity_signature=target_entity,
+                dominant_effect=effect_type,
+            )
+        self.hypotheses[target_coord].update(
+            effect=effect_type,
+            level_advanced=level_advanced,
+            is_lethal=is_lethal,
+        )
+
+        return rec
+
+    def get_hypothesis(self, coord: tuple[int, int]) -> MechanismHypothesis | None:
+        """Returns the MechanismHypothesis for this coordinate if observed."""
+        return self.hypotheses.get(coord)
+
+    def get_exploitable_controllers(self) -> list[tuple[int, int]]:
+        """Returns coordinates where both causal and goal relevance confidence permit exploitation."""
+        return [c for c, hyp in self.hypotheses.items() if hyp.can_reliably_exploit()]
+
+    def get_by_entity_signature(self, sig: EntitySignature) -> list[MechanismRecord]:
+        """Returns all historical transitions targeting entities with matching signature."""
+        return [r for r in self.records if r.target_entity == sig]
+
+    def get_by_effect_type(self, effect_type: EffectType) -> list[MechanismRecord]:
+        """Returns all historical transitions yielding the specified effect type."""
+        return [r for r in self.records if r.effect_type == effect_type]
+
+    def get_active_controllers(self) -> list[tuple[int, int]]:
+        """Returns verified active coordinate controllers."""
+        return list(self.active_controllers)
+
+    def get_inert_signatures(self) -> set[EntitySignature]:
+        """Returns entity signatures confirmed to produce no meaningful state change."""
+        return set(self.inert_signatures)
+
+    def is_signature_inert(self, sig: EntitySignature) -> bool:
+        """Returns True if the entity signature is confirmed inert."""
+        return sig in self.inert_signatures
+
+    def is_signature_active(self, sig: EntitySignature) -> bool:
+        """Returns True if the entity signature is confirmed active."""
+        return sig in self.active_signatures
+
+    def compute_equivalence_classes(self, entities: Sequence[Any]) -> dict[EntitySignature, list[Any]]:
+        """Groups candidate entities into morphological equivalence classes."""
+        classes: dict[EntitySignature, list[Any]] = defaultdict(list)
+        for ent in entities:
+            sig = EntitySignature.from_entity(ent)
+            classes[sig].append(ent)
+        return dict(classes)
+
+    def filter_inert_classes(self, entities: Sequence[Any]) -> list[Any]:
+        """
+        Prunes all entities belonging to an equivalence class already confirmed inert.
+        If all entities would be pruned, returns the original list as fallback.
+        """
+        if not self.inert_signatures:
+            return list(entities)
+
+        viable = []
+        for ent in entities:
+            sig = EntitySignature.from_entity(ent)
+            if sig not in self.inert_signatures:
+                viable.append(ent)
+
+        return viable if viable else list(entities)
+
+    def compress_to_symbolic(self) -> str:
+        """
+        Compresses the causal ledger into compact Astra-style symbolic shorthand.
+        Example: 'CTRL=[(32,5):STRU,(32,58):STRU] INERT_SIGS=1 ACTIVE_SIGS=1'
+        """
+        ctrl_parts = [
+            f"({c[0]},{c[1]}):{self.hypotheses[c].dominant_effect.value[:4]}"
+            for c in sorted(self.active_controllers)
+            if c in self.hypotheses
+        ]
+        ctrl_str = ",".join(ctrl_parts) if ctrl_parts else "none"
+        inert_count = len(self.inert_signatures)
+        active_count = len(self.active_signatures)
+
+        return f"CTRL=[{ctrl_str}] INERT_SIGS={inert_count} ACTIVE_SIGS={active_count}"
+
+    def reset_level(self, keep_abstract_signatures: bool = True):
+        """
+        Resets level-scoped coordinates while optionally preserving abstract entity signatures.
+        """
+        self.active_controllers.clear()
+        self.hypotheses.clear()
+        if not keep_abstract_signatures:
+            self.records.clear()
+            self.signature_to_effects.clear()
+            self.inert_signatures.clear()
+            self.active_signatures.clear()
+
+# ======================================================================
+# INLINED: structured_belief.py
+# ======================================================================
+
+"""
+5-Tier Structured Memory & Belief State Architecture for ARC-AGI-3.
+Replaces unstructured scratchpad with 5 dedicated cognitive memory modules:
+  A. Perceptual Memory (Entities, positions, morphology, spatial diffs)
+  B. Causal Memory (Action-delta transitions, causal intervention attribution)
+  C. Hypothesis Memory (Bayesian posteriors over kinematics, mechanics, goals)
+  D. Goal Memory (Candidate goal coordinates, evidence, precondition chains)
+  E. Skill Memory (Cross-level invariant relational rules)
+"""
+
+
+import math
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
+
+
+
+# ---------------------------------------------------------------------------
+# A. Perceptual Memory
+# ---------------------------------------------------------------------------
+
+@dataclass
+class PerceptualEntityRecord:
+    entity_id: int
+    color: int
+    size: int
+    centroid: tuple[int, int]
+    bbox: tuple[int, int, int, int]
+    is_dynamic: bool
+    last_seen_step: int
+
+
+class PerceptualMemory:
+    """Tracks spatio-temporal entity profiles over a sliding window."""
+
+    def __init__(self, window_size: int = 20):
+        self.window_size = window_size
+        self.frame_history: deque[np.ndarray] = deque(maxlen=window_size)
+        self.player_pos_history: deque[tuple[int, int]] = deque(maxlen=window_size)
+        self.entities_by_id: dict[int, PerceptualEntityRecord] = {}
+        self.avatar_color: int | None = None
+        self.background_color: int = 0
+
+    def update(
+        self,
+        grid: np.ndarray,
+        entities: list[Any],
+        player_pos: tuple[int, int] | None,
+        player_color: int | None,
+        bg_color: int,
+        step: int,
+    ):
+        self.frame_history.append(grid.copy())
+        self.background_color = bg_color
+        if player_color is not None:
+            self.avatar_color = player_color
+        if player_pos is not None:
+            self.player_pos_history.append(player_pos)
+
+        # Update entity records
+        for ent in entities:
+            eid = getattr(ent, "entity_id", id(ent))
+            color = getattr(ent, "color", 0)
+            size = getattr(ent, "size", 1)
+            centroid = getattr(ent, "centroid", (0, 0))
+            bbox = getattr(ent, "bbox", (0, 0, 0, 0))
+            is_dyn = getattr(ent, "is_dynamic", False)
+            cy, cx = int(round(centroid[0])), int(round(centroid[1]))
+
+            self.entities_by_id[eid] = PerceptualEntityRecord(
+                entity_id=eid,
+                color=color,
+                size=size,
+                centroid=(cy, cx),
+                bbox=bbox,
+                is_dynamic=is_dyn,
+                last_seen_step=step,
+            )
+
+    def get_current_avatar_pos(self) -> tuple[int, int] | None:
+        return self.player_pos_history[-1] if self.player_pos_history else None
+
+
+# ---------------------------------------------------------------------------
+# B. Causal Memory
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CausalTransition:
+    step: int
+    action: str
+    payload: dict[str, Any]
+    prev_player_pos: tuple[int, int] | None
+    next_player_pos: tuple[int, int] | None
+    avatar_delta: tuple[int, int]  # (dy, dx)
+    diff_pixel_count: int
+    is_direct_intervention: bool
+
+
+class CausalMemory:
+    """Maintains transition tuples and causal attribution flags."""
+
+    def __init__(self, max_records: int = 200):
+        self.transitions: list[CausalTransition] = []
+        self.max_records = max_records
+        self.action_success_counts: dict[str, int] = defaultdict(int)
+        self.action_stationary_counts: dict[str, int] = defaultdict(int)
+
+    def record(
+        self,
+        step: int,
+        action: str,
+        payload: dict[str, Any],
+        prev_pos: tuple[int, int] | None,
+        curr_pos: tuple[int, int] | None,
+        diff_pixel_count: int = 0,
+    ) -> CausalTransition:
+        dy, dx = (0, 0)
+        if prev_pos is not None and curr_pos is not None:
+            dy = curr_pos[0] - prev_pos[0]
+            dx = curr_pos[1] - prev_pos[1]
+
+        is_direct = (dy != 0 or dx != 0 or action == "ACTION6")
+
+        if (dy, dx) != (0, 0):
+            self.action_success_counts[action] += 1
+        else:
+            self.action_stationary_counts[action] += 1
+
+        trans = CausalTransition(
+            step=step,
+            action=action,
+            payload=payload,
+            prev_player_pos=prev_pos,
+            next_player_pos=curr_pos,
+            avatar_delta=(dy, dx),
+            diff_pixel_count=diff_pixel_count,
+            is_direct_intervention=is_direct,
+        )
+        self.transitions.append(trans)
+        if len(self.transitions) > self.max_records:
+            self.transitions.pop(0)
+        return trans
+
+
+# ---------------------------------------------------------------------------
+# C. Hypothesis Memory
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HypothesisRecord:
+    hypothesis_id: str
+    category: str  # "kinematics", "barrier", "goal_trigger", "precondition"
+    description: str
+    posterior: float = 0.5
+    evidence_for: int = 0
+    evidence_against: int = 0
+    falsified: bool = False
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+class HypothesisMemory:
+    """Bayesian hypothesis tracker with normalized posteriors and falsification."""
+
+    def __init__(self):
+        self.hypotheses: dict[str, HypothesisRecord] = {}
+
+    def register(
+        self,
+        hypothesis_id: str,
+        category: str,
+        description: str,
+        prior: float = 0.5,
+        details: dict[str, Any] | None = None,
+    ):
+        if hypothesis_id not in self.hypotheses:
+            self.hypotheses[hypothesis_id] = HypothesisRecord(
+                hypothesis_id=hypothesis_id,
+                category=category,
+                description=description,
+                posterior=prior,
+                details=details or {},
+            )
+
+    def update_evidence(self, hypothesis_id: str, supported: bool, weight: float = 1.0):
+        if hypothesis_id not in self.hypotheses:
+            return
+        hyp = self.hypotheses[hypothesis_id]
+        if hyp.falsified:
+            return
+
+        if supported:
+            hyp.evidence_for += 1
+            # Multiplicative Bayesian odds update
+            odds = (hyp.posterior / max(1e-6, 1.0 - hyp.posterior)) * (1.0 + 0.5 * weight)
+            hyp.posterior = min(0.99, odds / (1.0 + odds))
+        else:
+            hyp.evidence_against += 1
+            odds = (hyp.posterior / max(1e-6, 1.0 - hyp.posterior)) * (1.0 / (1.0 + 0.8 * weight))
+            hyp.posterior = max(0.01, odds / (1.0 + odds))
+
+    def falsify(self, hypothesis_id: str):
+        if hypothesis_id in self.hypotheses:
+            self.hypotheses[hypothesis_id].falsified = True
+            self.hypotheses[hypothesis_id].posterior = 0.0
+
+    def compute_entropy(self, category: str | None = None) -> float:
+        """Computes Shannon entropy over active hypotheses."""
+        active = [h for h in self.hypotheses.values() if not h.falsified]
+        if category:
+            active = [h for h in active if h.category == category]
+        if not active:
+            return 0.0
+
+        probs = np.array([h.posterior for h in active], dtype=float)
+        sum_p = probs.sum()
+        if sum_p <= 1e-8:
+            return 0.0
+        norm_p = probs / sum_p
+        ent = -float(np.sum(norm_p * np.log2(norm_p + 1e-12)))
+        return max(0.0, ent)
+
+    def get_distribution(self) -> dict[str, float]:
+        return {hid: h.posterior for hid, h in self.hypotheses.items() if not h.falsified}
+
+
+# ---------------------------------------------------------------------------
+# D. Goal Memory
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CandidateGoalRecord:
+    coord: tuple[int, int]
+    color: int
+    entity_id: int | None
+    confidence: float = 0.5
+    visit_count: int = 0
+    falsified: bool = False
+    requires_precondition: bool = False
+    precondition_key_color: int | None = None
+
+
+@dataclass
+class GoalVariableHypothesis:
+    """Hypothesis that manipulating a specific state variable advances toward goal state."""
+
+    variable_name: str
+    target_coord: tuple[int, int] | None = None
+    observations: int = 0
+    progress_correlations: int = 0
+    confidence: float = 0.5
+
+    @property
+    def posterior(self) -> float:
+        """Laplace-smoothed posterior probability P(goal | variable)."""
+        if self.observations == 0:
+            return 0.5
+        return (self.progress_correlations + 1.0) / (self.observations + 2.0)
+
+
+class GoalMemory:
+    """Tracks goal candidates, evidence accumulators, and prerequisite chains."""
+
+    def __init__(self):
+        self.candidate_goals: dict[tuple[int, int], CandidateGoalRecord] = {}
+        self.active_goal_coord: tuple[int, int] | None = None
+        self.variable_hypotheses: dict[str, GoalVariableHypothesis] = {}
+
+    def register_variable(
+        self,
+        var_name: str,
+        target_coord: tuple[int, int] | None = None,
+        prior: float = 0.5,
+    ) -> GoalVariableHypothesis:
+        """Registers a latent goal-variable hypothesis."""
+        if var_name not in self.variable_hypotheses:
+            self.variable_hypotheses[var_name] = GoalVariableHypothesis(
+                variable_name=var_name,
+                target_coord=target_coord,
+                confidence=prior,
+            )
+        return self.variable_hypotheses[var_name]
+
+    def record_variable_transition(self, var_name: str, progress_occurred: bool):
+        """Updates Bayesian posterior P(goal | variable) upon observing state change."""
+        hyp = self.register_variable(var_name)
+        hyp.observations += 1
+        if progress_occurred:
+            hyp.progress_correlations += 1
+        hyp.confidence = hyp.posterior
+
+    def get_top_goal_variable(self) -> GoalVariableHypothesis | None:
+        """Returns the variable with the highest posterior correlation with goal progress."""
+        if not self.variable_hypotheses:
+            return None
+        return max(self.variable_hypotheses.values(), key=lambda h: h.confidence)
+
+    def add_candidate(self, coord: tuple[int, int], color: int, entity_id: int | None = None):
+        if coord not in self.candidate_goals:
+            self.candidate_goals[coord] = CandidateGoalRecord(
+                coord=coord, color=color, entity_id=entity_id
+            )
+
+    def record_visit(self, coord: tuple[int, int], level_advanced: bool) -> bool:
+        if coord not in self.candidate_goals:
+            return False
+        goal = self.candidate_goals[coord]
+        goal.visit_count += 1
+        if level_advanced:
+            goal.confidence = 1.0
+            return True
+        else:
+            # Reached goal without completing level
+            goal.confidence = max(0.0, goal.confidence - 0.35)
+            if goal.visit_count >= 2:
+                goal.falsified = True
+                if self.active_goal_coord == coord:
+                    self.active_goal_coord = None
+            return False
+
+    def mark_precondition(self, coord: tuple[int, int], key_color: int | None = None):
+        if coord in self.candidate_goals:
+            self.candidate_goals[coord].requires_precondition = True
+            self.candidate_goals[coord].precondition_key_color = key_color
+
+    def falsify(self, coord: tuple[int, int]):
+        if coord in self.candidate_goals:
+            self.candidate_goals[coord].falsified = True
+            if self.active_goal_coord == coord:
+                self.active_goal_coord = None
+
+    def get_best_candidate(self, current_pos: tuple[int, int] | None) -> tuple[int, int] | None:
+        viable = [g for g in self.candidate_goals.values() if not g.falsified]
+        if not viable:
+            return None
+
+        if current_pos is None:
+            return max(viable, key=lambda g: g.confidence).coord
+
+        # Balance confidence with Manhattan distance
+        def score(g: CandidateGoalRecord) -> float:
+            dist = abs(g.coord[0] - current_pos[0]) + abs(g.coord[1] - current_pos[1])
+            return g.confidence - 0.02 * dist
+
+        best = max(viable, key=score)
+        self.active_goal_coord = best.coord
+        return best.coord
+
+
+# ---------------------------------------------------------------------------
+# E. Skill Memory
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AbstractSkill:
+    skill_id: str
+    origin_game: str
+    origin_level: int
+    rule_type: str  # "kinematic_mapping", "unlock_barrier", "coordinate_targeting"
+    schema: dict[str, Any]
+    confidence: float = 0.8
+
+
+class SkillMemory:
+    """Stores and retrieves abstract relational invariant rules across levels."""
+
+    def __init__(self):
+        self.skills: list[AbstractSkill] = []
+
+    def save_skill(
+        self,
+        skill_id: str,
+        origin_game: str,
+        origin_level: int,
+        rule_type: str,
+        schema: dict[str, Any],
+        confidence: float = 0.8,
+    ):
+        self.skills.append(
+            AbstractSkill(
+                skill_id=skill_id,
+                origin_game=origin_game,
+                origin_level=origin_level,
+                rule_type=rule_type,
+                schema=schema,
+                confidence=confidence,
+            )
+        )
+
+    def get_skills_by_type(self, rule_type: str) -> list[AbstractSkill]:
+        return [s for s in self.skills if s.rule_type == rule_type]
+
+
+# ---------------------------------------------------------------------------
+# Unified Structured Belief State
+# ---------------------------------------------------------------------------
+
+class StructuredBeliefState:
+    """Unified 5-tier memory manager for Baseline 2.0 (FD-NSA)."""
+
+    def __init__(self, game_id: str):
+        self.game_id = game_id
+        self.perceptual = PerceptualMemory()
+        self.causal = CausalMemory()
+        self.hypotheses = HypothesisMemory()
+        self.goals = GoalMemory()
+        self.skills = SkillMemory()
+        self.mechanisms = MechanismMemory()
+        self.current_level = 1
+        self.step_count = 0
+
+    def reset_level(self, new_level: int):
+        self.current_level = new_level
+        # Reset level-local goal and perceptual memory, but preserve causal & skill invariants
+        self.goals = GoalMemory()
+        self.perceptual.frame_history.clear()
+        self.perceptual.player_pos_history.clear()
+        self.mechanisms.reset_level(keep_abstract_signatures=True)
+
+# ======================================================================
+# INLINED: falsification_engine.py
+# ======================================================================
+
+"""
+Causal Prediction-Error World Model & Falsification Engine for ARC-AGI-3.
+Implements:
+1. 1-Step Forward State Expectation Generator: Predicts avatar position, collisions, and entity deltas.
+2. Multi-Aspect Decomposed Prediction Error Vector:
+     e_t = (e_pos, e_appear, e_disappear, e_color, e_collision, e_goal)
+3. Bayesian Posterior Updating with Conditional Falsification:
+     Distinguishes hard invariant contradictions from dormant conditional prerequisites.
+4. Historical Replay Verification:
+     Backtests candidate transition rules against historical causal transitions.
+"""
+
+
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+
+
+@dataclass
+class ForwardPrediction:
+    predicted_player_pos: tuple[int, int] | None
+    predicted_delta: tuple[int, int]  # (dy, dx)
+    expected_collision: bool
+    expected_interactive_trigger: bool
+    expected_goal_reach: bool
+
+
+class FalsificationEngine:
+    """Computes prediction errors, updates Bayesian posteriors, and verifies hypotheses against history."""
+
+    def __init__(self):
+        self.learned_barriers: set[tuple[int, int]] = set()
+        self.confirmed_passable: set[tuple[int, int]] = set()
+        self.kinematic_mappings: dict[str, tuple[int, int]] = {}
+        self.dormant_preconditions: dict[tuple[int, int], str] = {}
+
+    def predict_next_state(
+        self,
+        action: str,
+        current_pos: tuple[int, int] | None,
+        hypotheses: HypothesisMemory,
+        grid_shape: tuple[int, int] = (16, 16),
+        target_pos: tuple[int, int] | None = None,
+    ) -> ForwardPrediction:
+        """Generates an explicit 1-step prediction before the environment executes the action."""
+        if current_pos is None:
+            return ForwardPrediction(
+                predicted_player_pos=None,
+                predicted_delta=(0, 0),
+                expected_collision=False,
+                expected_interactive_trigger=False,
+                expected_goal_reach=False,
+            )
+
+        H, W = grid_shape
+        # Kinematic prediction from active hypothesis
+        dy, dx = (0, 0)
+        hyp_key = f"kinematics_{action}"
+        if hyp_key in hypotheses.hypotheses and not hypotheses.hypotheses[hyp_key].falsified:
+            dy = hypotheses.hypotheses[hyp_key].details.get("dy", 0)
+            dx = hypotheses.hypotheses[hyp_key].details.get("dx", 0)
+        elif action in self.kinematic_mappings:
+            dy, dx = self.kinematic_mappings[action]
+        else:
+            # Cardinal default prior
+            cardinals = {
+                "ACTION1": (-1, 0),
+                "ACTION2": (1, 0),
+                "ACTION3": (0, -1),
+                "ACTION4": (0, 1),
+            }
+            dy, dx = cardinals.get(action, (0, 0))
+
+        ny = current_pos[0] + dy
+        nx = current_pos[1] + dx
+
+        # Check bounds and learned barrier collisions
+        collision = False
+        if ny < 0 or ny >= H or nx < 0 or nx >= W or (ny, nx) in self.learned_barriers:
+            collision = True
+            predicted_pos = current_pos
+            pred_delta = (0, 0)
+        else:
+            predicted_pos = (ny, nx)
+            pred_delta = (dy, dx)
+
+        reaches_target = (target_pos is not None and predicted_pos == target_pos)
+
+        return ForwardPrediction(
+            predicted_player_pos=predicted_pos,
+            predicted_delta=pred_delta,
+            expected_collision=collision,
+            expected_interactive_trigger=(action == "ACTION6"),
+            expected_goal_reach=reaches_target,
+        )
+
+    def evaluate_prediction_error(
+        self,
+        prediction: ForwardPrediction,
+        actual_pos: tuple[int, int] | None,
+        prev_pos: tuple[int, int] | None,
+        level_advanced: bool = False,
+        grid_diff_count: int = 0,
+    ) -> PredictionError:
+        """Calculates multi-aspect decomposed prediction error vector."""
+        # 1. Position error (Manhattan distance)
+        pos_err = 0.0
+        if prediction.predicted_player_pos and actual_pos:
+            pos_err = float(
+                abs(prediction.predicted_player_pos[0] - actual_pos[0])
+                + abs(prediction.predicted_player_pos[1] - actual_pos[1])
+            )
+        elif prediction.predicted_player_pos != actual_pos:
+            pos_err = 1.0
+
+        # 2. Collision error
+        coll_err = 0.0
+        actual_moved = (prev_pos is not None and actual_pos is not None and actual_pos != prev_pos)
+        if prediction.expected_collision and actual_moved:
+            coll_err = 1.0  # Hallucinated barrier
+        elif not prediction.expected_collision and prev_pos == actual_pos and prediction.predicted_delta != (0, 0):
+            coll_err = 1.0  # Unexpected barrier
+
+        # 3. Goal progress error
+        goal_err = 0.0
+        if prediction.expected_goal_reach and not level_advanced:
+            goal_err = 1.0  # Reached expected goal but level didn't advance
+        elif not prediction.expected_goal_reach and level_advanced:
+            goal_err = 0.5  # Serendipitous level completion
+
+        # 4. Appearance / Disappearance errors (from pixel diffs)
+        appear_err = 0.1 * min(10, grid_diff_count) if grid_diff_count > 2 else 0.0
+        disappear_err = 0.0
+
+        return PredictionError(
+            position_error=pos_err,
+            appearance_error=appear_err,
+            disappearance_error=disappear_err,
+            color_error=0.0,
+            collision_error=coll_err,
+            goal_progress_error=goal_err,
+        )
+
+    def update_and_falsify(
+        self,
+        action: str,
+        prev_pos: tuple[int, int] | None,
+        actual_pos: tuple[int, int] | None,
+        prediction: ForwardPrediction,
+        error: PredictionError,
+        hypotheses: HypothesisMemory,
+    ):
+        """Bayesian update and conditional falsification based on prediction error."""
+        if prev_pos is None or actual_pos is None:
+            return
+
+        dy = actual_pos[0] - prev_pos[0]
+        dx = actual_pos[1] - prev_pos[1]
+
+        # 1. Kinematic verification / updating
+        hyp_key = f"kinematics_{action}"
+        if (dy, dx) != (0, 0):
+            norm_dy = 1 if dy > 0 else (-1 if dy < 0 else 0)
+            norm_dx = 1 if dx > 0 else (-1 if dx < 0 else 0)
+            self.kinematic_mappings[action] = (norm_dy, norm_dx)
+            self.confirmed_passable.add(actual_pos)
+
+            if hyp_key in hypotheses.hypotheses:
+                expected_delta = hypotheses.hypotheses[hyp_key].details.get("delta")
+                if expected_delta == (norm_dy, norm_dx):
+                    hypotheses.update_evidence(hyp_key, supported=True, weight=1.5)
+                else:
+                    # Invariant contradiction
+                    hypotheses.falsify(hyp_key)
+            else:
+                hypotheses.register(
+                    hypothesis_id=hyp_key,
+                    category="kinematics",
+                    description=f"Action {action} produces translation ({norm_dy}, {norm_dx})",
+                    prior=0.75,
+                    details={"dy": norm_dy, "dx": norm_dx, "delta": (norm_dy, norm_dx)},
+                )
+        else:
+            # Stationary outcome: Did we attempt a move into a barrier?
+            if prediction.predicted_delta != (0, 0):
+                target_cell = (prev_pos[0] + prediction.predicted_delta[0], prev_pos[1] + prediction.predicted_delta[1])
+                self.learned_barriers.add(target_cell)
+
+    def verify_against_history(
+        self,
+        candidate_rule: tuple[int, int],  # (dy, dx)
+        action: str,
+        causal_memory: CausalMemory,
+    ) -> bool:
+        """Historical replay verification: checks if candidate rule contradicts any past observations."""
+        relevant = [t for t in causal_memory.transitions if t.action == action and t.prev_player_pos is not None]
+        if not relevant:
+            return True
+
+        contradictions = 0
+        for t in relevant:
+            actual_delta = t.avatar_delta
+            if actual_delta != (0, 0) and actual_delta != candidate_rule:
+                contradictions += 1
+
+        return contradictions == 0
+
+# ======================================================================
+# INLINED: deadlock_taxonomy.py
+# ======================================================================
+
+"""
+6-Tier Deadlock Taxonomy & Targeted Recovery Engine for ARC-AGI-3.
+Classifies execution deadlocks and executes structured recovery strategies:
+  Type 1: Navigation Loop (Oscillation between cyclic positions)
+  Type 2: Wrong Goal (Unrewarded goal contact without level advancement)
+  Type 3: Invalid Interaction Model (Action repeatedly yields unexpected zero delta)
+  Type 4: Incomplete Precondition (Target reachable geometrically but blocked by prerequisite)
+  Type 5: Lethal Trap (State entered GAME_OVER, requires RESET + hazard memory)
+  Type 6: Perceptual Ambiguity (Visually indistinguishable candidates require probe)
+"""
+
+
+from collections import deque
+from dataclasses import dataclass
+from enum import Enum
+from typing import Any
+
+
+class DeadlockType(str, Enum):
+    TYPE_1_NAVIGATION_LOOP = "TYPE_1_NAVIGATION_LOOP"
+    TYPE_2_WRONG_GOAL = "TYPE_2_WRONG_GOAL"
+    TYPE_3_INVALID_INTERACTION = "TYPE_3_INVALID_INTERACTION"
+    TYPE_4_INCOMPLETE_PRECONDITION = "TYPE_4_INCOMPLETE_PRECONDITION"
+    TYPE_5_LETHAL_TRAP = "TYPE_5_LETHAL_TRAP"
+    TYPE_6_PERCEPTUAL_AMBIGUITY = "TYPE_6_PERCEPTUAL_AMBIGUITY"
+
+
+@dataclass
+class DeadlockEvent:
+    deadlock_type: DeadlockType
+    description: str
+    affected_coord: tuple[int, int] | None = None
+    affected_action: str | None = None
+    recommended_recovery: str = "explore_orthogonal"
+
+
+class DeadlockTaxonomyEngine:
+    """Detects and resolves execution deadlocks with targeted recovery routines."""
+
+    def __init__(self):
+        self.recent_positions: deque[tuple[int, int]] = deque(maxlen=8)
+        self.visitation_counts: dict[tuple[int, int], int] = {}
+        self.taboo_nodes: set[tuple[int, int]] = set()
+        self.lethal_hazards: set[tuple[int, int]] = set()
+        self.action_stall_counter: dict[str, int] = {}
+        self.active_deadlock: DeadlockEvent | None = None
+
+    def record_step(
+        self,
+        current_pos: tuple[int, int] | None,
+        action: str,
+        state: str,
+        active_goal: tuple[int, int] | None,
+        goal_reached_without_win: bool = False,
+        diff_count: int = 0,
+        target_coord: tuple[int, int] | None = None,
+    ) -> DeadlockEvent | None:
+        """Classifies state and returns active deadlock if detected."""
+        self.active_deadlock = None
+
+        # 1. Type 5: Lethal Trap / Game Over
+        if state in ("GAME_OVER", "GameState.GAME_OVER"):
+            if current_pos:
+                self.lethal_hazards.add(current_pos)
+            event = DeadlockEvent(
+                deadlock_type=DeadlockType.TYPE_5_LETHAL_TRAP,
+                description=f"State entered GAME_OVER at position {current_pos}",
+                affected_coord=current_pos,
+                affected_action=action,
+                recommended_recovery="reset_and_mark_hazard",
+            )
+            self.active_deadlock = event
+            return event
+
+        # 2. Type 3: Invalid Interaction (Repeated zero-effect clicks on inert coordinates)
+        if action == "ACTION6" and diff_count <= 2:
+            self.action_stall_counter["ACTION6_INERT"] = self.action_stall_counter.get("ACTION6_INERT", 0) + 1
+            if self.action_stall_counter["ACTION6_INERT"] >= 3:
+                event = DeadlockEvent(
+                    deadlock_type=DeadlockType.TYPE_3_INVALID_INTERACTION,
+                    description=f"Repeated inert clicks on {target_coord} (diff={diff_count})",
+                    affected_coord=target_coord,
+                    affected_action=action,
+                    recommended_recovery="switch_to_orthogonal_candidates",
+                )
+                self.active_deadlock = event
+                return event
+        elif action == "ACTION6" and diff_count > 2:
+            self.action_stall_counter["ACTION6_INERT"] = 0
+
+        if current_pos is None:
+            return None
+
+        self.recent_positions.append(current_pos)
+        self.visitation_counts[current_pos] = self.visitation_counts.get(current_pos, 0) + 1
+
+        # 3. Type 2: Wrong Goal
+        if goal_reached_without_win and active_goal == current_pos:
+            event = DeadlockEvent(
+                deadlock_type=DeadlockType.TYPE_2_WRONG_GOAL,
+                description=f"Reached candidate target {current_pos} without level completion",
+                affected_coord=current_pos,
+                recommended_recovery="falsify_goal_and_replan",
+            )
+            self.active_deadlock = event
+            return event
+
+        # 4. Type 1: Navigation Loop (A -> B -> A -> B oscillation or local node stall)
+        if len(self.recent_positions) >= 4:
+            p = list(self.recent_positions)
+            if p[-1] == p[-3] and p[-2] == p[-4] and p[-1] != p[-2]:
+                self.taboo_nodes.add(p[-1])
+                self.taboo_nodes.add(p[-2])
+                event = DeadlockEvent(
+                    deadlock_type=DeadlockType.TYPE_1_NAVIGATION_LOOP,
+                    description=f"Oscillation detected between {p[-1]} and {p[-2]}",
+                    affected_coord=p[-1],
+                    recommended_recovery="taboo_path_diversion",
+                )
+                self.active_deadlock = event
+                return event
+
+        if self.visitation_counts.get(current_pos, 0) >= 4:
+            self.taboo_nodes.add(current_pos)
+            event = DeadlockEvent(
+                deadlock_type=DeadlockType.TYPE_1_NAVIGATION_LOOP,
+                description=f"Position {current_pos} visited {self.visitation_counts[current_pos]} times",
+                affected_coord=current_pos,
+                recommended_recovery="taboo_path_diversion",
+            )
+            self.active_deadlock = event
+            return event
+
+        return None
+
+    def reset_level(self):
+        self.recent_positions.clear()
+        self.visitation_counts.clear()
+        self.taboo_nodes.clear()
+        self.action_stall_counter.clear()
+        self.active_deadlock = None
+
+# ======================================================================
+# INLINED: level_transfer.py
+# ======================================================================
+
+"""
+Cross-Level Skill Transfer & Invariant Schema Extraction for ARC-AGI-3.
+Prevents negative transfer by separating relational invariant schemas from concrete tokens:
+  1. Preserves verified cardinal kinematic mappings across levels (e.g. ACTION1 = UP).
+  2. Preserves avatar morphology priors (e.g. singleton vs multi-pixel entity).
+  3. Resets and dynamically re-binds concrete color tokens and coordinates per level.
+"""
+
+
+from collections.abc import Set as AbstractSet
+from dataclasses import dataclass, field
+from typing import Any
+
+
+
+@dataclass
+class LevelTransferPackage:
+    verified_kinematics: dict[str, tuple[int, int]]  # Action -> (dy, dx)
+    avatar_is_singleton: bool
+    successful_action_modalities: set[str]  # e.g. {"ACTION1", "ACTION2", "ACTION6"}
+    total_levels_completed: int
+    transferred_inert_signatures: set[EntitySignature] = field(default_factory=set)
+    transferred_active_signatures: set[EntitySignature] = field(default_factory=set)
+
+
+class LevelTransferManager:
+    """Manages cross-level knowledge retention while safeguarding against color/token inversion."""
+
+    def __init__(self):
+        self.verified_kinematics: dict[str, tuple[int, int]] = {}
+        self.avatar_is_singleton: bool = True
+        self.confirmed_modalities: set[str] = set()
+        self.completed_level_count: int = 0
+        self.inert_signatures: set[EntitySignature] = set()
+        self.active_signatures: set[EntitySignature] = set()
+
+    def extract_level_schema(
+        self,
+        level_index: int,
+        kinematic_mappings: dict[str, tuple[int, int]],
+        avatar_size: int,
+        actions_used: set[str],
+        skill_memory: SkillMemory,
+        game_id: str,
+        mechanism_memory: Any | None = None,
+    ) -> LevelTransferPackage:
+        """Called immediately upon completing a level to compile reusable invariant schemas."""
+        self.completed_level_count += 1
+        self.verified_kinematics.update(kinematic_mappings)
+        self.avatar_is_singleton = (avatar_size <= 1)
+        self.confirmed_modalities.update(actions_used)
+
+        if mechanism_memory is not None and hasattr(mechanism_memory, "get_inert_signatures"):
+            self.inert_signatures.update(mechanism_memory.get_inert_signatures())
+            self.active_signatures.update(getattr(mechanism_memory, "active_signatures", set()))
+
+        pkg = LevelTransferPackage(
+            verified_kinematics=dict(self.verified_kinematics),
+            avatar_is_singleton=self.avatar_is_singleton,
+            successful_action_modalities=set(self.confirmed_modalities),
+            total_levels_completed=self.completed_level_count,
+            transferred_inert_signatures=set(self.inert_signatures),
+            transferred_active_signatures=set(self.active_signatures),
+        )
+
+        skill_memory.save_skill(
+            skill_id=f"level_{level_index}_kinematic_transfer",
+            origin_game=game_id,
+            origin_level=level_index,
+            rule_type="kinematic_mapping",
+            schema={"kinematics": dict(self.verified_kinematics)},
+            confidence=0.95,
+        )
+
+        return pkg
+
+    def apply_transfer_priors(
+        self,
+        available_actions: list[str],
+    ) -> dict[str, tuple[int, int]]:
+        """Provides verified kinematic priors to the new level without carrying over concrete colors."""
+        priors: dict[str, tuple[int, int]] = {}
+        for act in available_actions:
+            if act in self.verified_kinematics:
+                priors[act] = self.verified_kinematics[act]
+        return priors
+
+    def apply_mechanism_priors(self, mechanism_memory: Any):
+        """Populates new level's mechanism memory with verified abstract entity priors."""
+        if hasattr(mechanism_memory, "inert_signatures"):
+            mechanism_memory.inert_signatures.update(self.inert_signatures)
+        if hasattr(mechanism_memory, "active_signatures"):
+            mechanism_memory.active_signatures.update(self.active_signatures)
 
 # ======================================================================
 # INLINED: layered_perception.py
@@ -710,6 +2248,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+
 @dataclass(frozen=True)
 class StepSummary:
     """Compact semantic representation of an environment step."""
@@ -756,6 +2295,15 @@ class PersistentReasoningState:
     last_predicted_pos: tuple[int, int] | None = None
     falsified_goals: set[tuple[int, int]] = field(default_factory=set)
     current_level: int = 1
+
+    # 7. Coordinate Affordance Memory (ACTION6)
+    active_affordances: list[tuple[int, int]] = field(default_factory=list)
+    inert_affordances: set[tuple[int, int]] = field(default_factory=set)
+    lethal_affordances: set[tuple[int, int]] = field(default_factory=set)
+    last_affordance_coord: tuple[int, int] | None = None
+    last_affordance_diff: int = 0
+    affordance_repeat_count: int = 0
+    last_effect_type: EffectType | None = None
 
     def has_active_plan(self) -> bool:
         """Returns True if there is a pending macro-action sequence."""
@@ -827,6 +2375,48 @@ class PersistentReasoningState:
         if (dy, dx) != (0, 0):
             self.action_effects[action] = (dy, dx)
 
+    def register_affordance_result(
+        self,
+        coord: tuple[int, int],
+        diff_count: int,
+        is_lethal: bool = False,
+        state_str: str = "NOT_FINISHED",
+        level_advanced: bool = False,
+        effect_type: EffectType | None = None,
+    ):
+        """Registers the causal outcome of clicking coordinate (y, x)."""
+        self.last_affordance_coord = coord
+        self.last_affordance_diff = diff_count
+
+        if effect_type is None:
+            effect_type = classify_effect(
+                diff_count=diff_count,
+                state=state_str,
+                level_advanced=level_advanced,
+                is_lethal=is_lethal,
+            )
+        self.last_effect_type = effect_type
+
+        if effect_type == EffectType.GAME_OVER:
+            self.lethal_affordances.add(coord)
+            if coord in self.active_affordances:
+                self.active_affordances.remove(coord)
+            self.affordance_repeat_count = 0
+            return
+
+        if effect_type in (EffectType.NONE, EffectType.UI_NOISE):
+            self.inert_affordances.add(coord)
+            if coord in self.active_affordances:
+                self.active_affordances.remove(coord)
+            self.affordance_repeat_count = 0
+        else:
+            # Genuine multi-pixel board transformation confirmed (LOCAL_MUTATION, STRUCTURAL_MUTATION, GLOBAL_MUTATION, LEVEL_ADVANCE)
+            if coord not in self.active_affordances:
+                self.active_affordances.append(coord)
+            if coord in self.inert_affordances:
+                self.inert_affordances.remove(coord)
+            self.affordance_repeat_count += 1
+
     def reset_level(self, new_level: int):
         """
         Resets level-scoped working memory upon level transition.
@@ -839,6 +2429,13 @@ class PersistentReasoningState:
         self.visitation_counts.clear()
         self.visited_positions.clear()
         self.last_predicted_pos = None
+        self.active_affordances.clear()
+        self.inert_affordances.clear()
+        self.lethal_affordances.clear()
+        self.last_affordance_coord = None
+        self.last_affordance_diff = 0
+        self.affordance_repeat_count = 0
+        self.last_effect_type = None
 
 
 class ContextCompactor:
@@ -1184,6 +2781,207 @@ class BeliefStateWorldModel:
         return (curr_pos[0] + dy, curr_pos[1] + dx)
 
 # ======================================================================
+# INLINED: action_algebra.py
+# ======================================================================
+
+"""
+Action Algebra Engine for ARC-AGI-3 (Baseline 3.0 B3.03).
+Infers algebraic relationships between actions from observed transitions:
+  - Inverse operations: f(f(s, A), B) == s  ==>  B = A^(-1)
+  - Self-inverse toggles: f(f(s, A), A) == s
+  - Additive compositions: f(s, A) yields monotonic state variable progress
+Prevents detrimental oscillation (e.g., alternating +1 / -1 buttons) and enables
+shortest-sequence planning under known group/monoid dynamics.
+"""
+
+
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Sequence
+
+
+
+@dataclass(frozen=True)
+class ActionRelation:
+    """Algebraic relationship between two actions or self-action."""
+
+    action_a: tuple[int, int]
+    action_b: tuple[int, int]
+    relation: str  # "inverse", "toggle", "additive", "identity"
+    evidence_count: int = 1
+
+
+class ActionAlgebraEngine:
+    """Discovers and maintains relational action algebra from transition histories."""
+
+    def __init__(self):
+        self.known_relations: dict[tuple[tuple[int, int], tuple[int, int]], ActionRelation] = {}
+        self.inverse_map: dict[tuple[int, int], tuple[int, int]] = {}
+        self.toggles: set[tuple[int, int]] = set()
+
+    def update_from_records(self, records: Sequence[MechanismRecord]):
+        """Analyzes transition records sequentially to identify algebraic structures."""
+        if len(records) < 2:
+            return
+
+        for i in range(len(records) - 1):
+            r1 = records[i]
+            r2 = records[i + 1]
+
+            # Only analyze coordinate interventions with valid frame hashes
+            if not (r1.pre_frame_hash and r1.post_frame_hash and r2.pre_frame_hash and r2.post_frame_hash):
+                continue
+
+            # Check if r2 was executed directly on the state left by r1
+            if r1.post_frame_hash != r2.pre_frame_hash:
+                continue
+
+            c1 = r1.target_coord
+            c2 = r2.target_coord
+
+            # 1. State reversibility: does r2 restore the state to r1's initial state?
+            if r2.post_frame_hash == r1.pre_frame_hash:
+                if c1 == c2:
+                    # Self-inverse / toggle: A followed by A returns to initial state
+                    rel = ActionRelation(action_a=c1, action_b=c2, relation="toggle")
+                    self.known_relations[(c1, c2)] = rel
+                    self.toggles.add(c1)
+                else:
+                    # Inverse pair: A followed by B returns to initial state
+                    rel = ActionRelation(action_a=c1, action_b=c2, relation="inverse")
+                    self.known_relations[(c1, c2)] = rel
+                    self.known_relations[(c2, c1)] = ActionRelation(action_a=c2, action_b=c1, relation="inverse")
+                    self.inverse_map[c1] = c2
+                    self.inverse_map[c2] = c1
+
+    def is_inverse_pair(self, coord_a: tuple[int, int], coord_b: tuple[int, int]) -> bool:
+        """Returns True if clicking coord_b undoes clicking coord_a."""
+        return self.inverse_map.get(coord_a) == coord_b or (coord_a, coord_b) in self.known_relations
+
+    def is_toggle(self, coord: tuple[int, int]) -> bool:
+        """Returns True if repeating this coordinate toggles state back and forth."""
+        return coord in self.toggles
+
+    def get_inverse(self, coord: tuple[int, int]) -> tuple[int, int] | None:
+        """Returns the inverse coordinate controller if known."""
+        return self.inverse_map.get(coord)
+
+    def filter_oscillating_actions(
+        self,
+        candidate_coords: Sequence[tuple[int, int]],
+        recent_action_coords: Sequence[tuple[int, int]],
+    ) -> list[tuple[int, int]]:
+        """
+        Prunes candidate coordinates that would immediately undo the most recent action.
+        """
+        if not recent_action_coords:
+            return list(candidate_coords)
+
+        last_coord = recent_action_coords[-1]
+        inv_coord = self.get_inverse(last_coord)
+
+        if inv_coord is None:
+            return list(candidate_coords)
+
+        # Filter out the inverse action to avoid cancelling forward progress
+        filtered = [c for c in candidate_coords if c != inv_coord]
+        return filtered if filtered else list(candidate_coords)
+
+    def simplify_plan(self, plan: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+        """
+        Counterfactual simulation: algebraically simplifies a multi-step sequence of
+        actions before execution by cancelling adjacent inverse pairs and toggle pairs.
+        Example: [L, R, L, L] -> [L, L]
+        """
+        if len(plan) <= 1:
+            return list(plan)
+
+        simplified: list[tuple[int, int]] = []
+        for action in plan:
+            if not simplified:
+                simplified.append(action)
+                continue
+
+            prev = simplified[-1]
+
+            # 1. Toggle cancellation: T followed by T cancels out
+            if action == prev and self.is_toggle(action):
+                simplified.pop()
+                continue
+
+            # 2. Inverse cancellation: A followed by B cancels out
+            if self.is_inverse_pair(prev, action):
+                simplified.pop()
+                continue
+
+            simplified.append(action)
+
+        return simplified
+
+# ======================================================================
+# INLINED: model_gate.py
+# ======================================================================
+
+"""
+Conditional Model-Use Gate for ARC-AGI-3 (Baseline 3.0 B3.07).
+Decides whether to act directly, simulate/plan through the world model, or perform
+a discriminating epistemic probe. Avoids spending unnecessary computation or actions
+constructing models when direct execution is already validated.
+"""
+
+
+from enum import Enum
+
+
+class ModelUseDecision(str, Enum):
+    """Decision modes for action generation."""
+
+    ACT_DIRECTLY = "ACT_DIRECTLY"       # High confidence or active plan in flight; execute immediately
+    SIMULATE_MODEL = "SIMULATE_MODEL"   # Verified transition dynamics available; plan/simulate trajectory
+    PERFORM_PROBE = "PERFORM_PROBE"     # Epistemic uncertainty high; execute discriminating experiment
+
+
+class ModelGate:
+    """Arbitrates among direct execution, world-model planning, and epistemic probing."""
+
+    def __init__(self, confidence_threshold: float = 0.75):
+        self.confidence_threshold = confidence_threshold
+
+    def evaluate_decision(
+        self,
+        has_active_plan: bool,
+        can_reliably_plan: bool,
+        has_exploitable_controller: bool,
+        is_loop: bool = False,
+    ) -> ModelUseDecision:
+        """
+        Determines the optimal computational and action strategy for the current turn.
+
+        Args:
+            has_active_plan: True if a verified multi-step macro-plan is already in flight.
+            can_reliably_plan: True if world model kinematics and barriers are verified.
+            has_exploitable_controller: True if a high-confidence goal-advancing controller is identified.
+            is_loop: True if stagnation/deadlock loop was detected.
+
+        Returns:
+            ModelUseDecision member.
+        """
+        # Deadlock / loop breaks force epistemic probing
+        if is_loop:
+            return ModelUseDecision.PERFORM_PROBE
+
+        # 1. Direct Execution: macro-plan in flight or verified exploitable controller
+        if has_active_plan or has_exploitable_controller:
+            return ModelUseDecision.ACT_DIRECTLY
+
+        # 2. World Model Simulation: kinematics verified, plan shortest path to goal
+        if can_reliably_plan:
+            return ModelUseDecision.SIMULATE_MODEL
+
+        # 3. Epistemic Probing: explore untested dynamics or mechanisms
+        return ModelUseDecision.PERFORM_PROBE
+
+# ======================================================================
 # INLINED: epistemic_policy.py
 # ======================================================================
 
@@ -1209,6 +3007,9 @@ class EpistemicPolicy:
 
     def __init__(self):
         self.step_counter = 0
+        self.algebra = ActionAlgebraEngine()
+        self.model_gate = ModelGate()
+        self.recent_coords: deque[tuple[int, int]] = deque(maxlen=6)
 
     def select_action(
         self,
@@ -1217,6 +3018,7 @@ class EpistemicPolicy:
         world_model: BeliefStateWorldModel,
         reasoning_state: PersistentReasoningState | None = None,
         cognitive_analysis: CognitiveHierarchyAnalysis | None = None,
+        structured_belief: Any | None = None,
     ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """
         Selects next physical environment action given current belief state.
@@ -1269,6 +3071,20 @@ class EpistemicPolicy:
                     reasoning_state.falsify_goal(g)
                 elif is_loop:
                     reasoning_state.falsify_goal(g)
+
+        # Model-Use Gate: Determine execution strategy (direct vs simulation vs probe)
+        has_plan = bool(reasoning_state and reasoning_state.has_active_plan())
+        can_plan = world_model.can_reliably_plan()
+        has_exploit = False
+        if structured_belief is not None and hasattr(structured_belief, "mechanisms"):
+            has_exploit = len(structured_belief.mechanisms.get_exploitable_controllers()) > 0
+
+        model_decision = self.model_gate.evaluate_decision(
+            has_active_plan=has_plan,
+            can_reliably_plan=can_plan,
+            has_exploitable_controller=has_exploit,
+            is_loop=is_loop,
+        )
 
         # 2. Reasoning Persistence: Check if there is an active macro-plan in flight (and not in deadlock loop)
         if reasoning_state is not None and reasoning_state.has_active_plan() and not is_loop:
@@ -1359,7 +3175,7 @@ class EpistemicPolicy:
 
         # 5. Epistemic Probing Mode / Deadlock Breaker
         action, payload, trace = self._select_epistemic_probe(
-            observation, analysis, world_model, reasoning_state, is_loop
+            observation, analysis, world_model, reasoning_state, is_loop, structured_belief
         )
         if reasoning_state is not None and p_pos is not None:
             reasoning_state.last_predicted_pos = world_model.predict_next_avatar_pos(p_pos, action)
@@ -1372,6 +3188,7 @@ class EpistemicPolicy:
         world_model: BeliefStateWorldModel,
         reasoning_state: PersistentReasoningState | None = None,
         is_loop: bool = False,
+        structured_belief: Any | None = None,
     ) -> tuple[str, dict[str, Any], DecisionTrace]:
         """Selects informative probe action to distinguish candidate transition models or break deadlocks."""
         available = list(observation.available_actions)
@@ -1399,26 +3216,96 @@ class EpistemicPolicy:
 
         payload = {}
         if selected == "ACTION6":
-            # Bounded coordinate selection: choose entity centroid clamped to [0, 63]
+            # Update action algebra from mechanism transition ledger if available
+            if structured_belief is not None and hasattr(structured_belief, "mechanisms"):
+                self.algebra.update_from_records(structured_belief.mechanisms.records)
+
+            # Affordance-driven coordinate selection
+            last_coord = getattr(reasoning_state, "last_affordance_coord", None) if reasoning_state else None
+            last_diff = getattr(reasoning_state, "last_affordance_diff", 0) if reasoning_state else 0
+            repeat_count = getattr(reasoning_state, "affordance_repeat_count", 0) if reasoning_state else 0
+            lethal_set = getattr(reasoning_state, "lethal_affordances", set()) if reasoning_state else set()
+            inert_set = getattr(reasoning_state, "inert_affordances", set()) if reasoning_state else set()
+            active_list = getattr(reasoning_state, "active_affordances", []) if reasoning_state else []
+
+            # 1. Filter entities: compact play entities (avoiding huge obstacle blobs and letterbox/UI bounds)
+            cands = []
             if analysis.entities:
-                play_entities = [
+                for e in analysis.entities:
+                    cy, cx = int(round(e.centroid[0])), int(round(e.centroid[1]))
+                    # Discard letterbox border pixels and top UI indicator rows (cy <= 1)
+                    if not (2 <= cy <= 61 and 2 <= cx <= 61):
+                        continue
+                    if e.size > 120:  # Massive entities are obstacles or static backgrounds
+                        continue
+                    if (cy, cx) in lethal_set:
+                        continue
+                    cands.append(e)
+
+            chosen_coord: tuple[int, int] | None = None
+
+            # 2. Decision logic:
+            # Check mechanism confidence vs goal relevance before repeating active controller
+            mech_permits_exploit = True
+            if structured_belief is not None and hasattr(structured_belief, "mechanisms") and last_coord:
+                hyp = structured_belief.mechanisms.get_hypothesis(last_coord)
+                if hyp is not None and not hyp.can_reliably_exploit():
+                    mech_permits_exploit = False
+
+            if last_coord is not None and last_diff > 2 and repeat_count < 5 and last_coord not in lethal_set and mech_permits_exploit:
+                chosen_coord = last_coord
+            elif cands:
+                # Prioritize candidates not confirmed inert by coordinate
+                non_inert = [
                     e
-                    for e in analysis.entities
-                    if 1 < int(e.centroid[0]) < 62 and 1 < int(e.centroid[1]) < 62
+                    for e in cands
+                    if (int(round(e.centroid[0])), int(round(e.centroid[1]))) not in inert_set
                 ]
-                pool = play_entities if play_entities else analysis.entities
-                target_ent = pool[self.step_counter % len(pool)]
-                cy, cx = target_ent.centroid
-                payload = {
-                    "x": int(np.clip(cx, 0, 63)),
-                    "y": int(np.clip(cy, 0, 63)),
-                }
+                # B3.04: Causal equivalence class filtering (prune entire classes of inert entities)
+                if structured_belief is not None and hasattr(structured_belief, "mechanisms"):
+                    non_inert = structured_belief.mechanisms.filter_inert_classes(non_inert)
+
+                pool = non_inert if non_inert else cands
+                # Filter out oscillating inverse actions
+                coords_pool = [(int(round(e.centroid[0])), int(round(e.centroid[1]))) for e in pool]
+                pruned_coords = self.algebra.filter_oscillating_actions(coords_pool, list(self.recent_coords))
+                cands_to_score = [
+                    e
+                    for e in pool
+                    if (int(round(e.centroid[0])), int(round(e.centroid[1]))) in set(pruned_coords)
+                ] or pool
+
+                # B3.11: RHAE-aware utility ranking U(a) = αG + βI + γC - λK - μR
+                cand_scores = [
+                    (
+                        e,
+                        self._compute_action_utility(
+                            coord=(int(round(e.centroid[0])), int(round(e.centroid[1]))),
+                            entity=e,
+                            structured_belief=structured_belief,
+                            reasoning_state=reasoning_state,
+                        ),
+                    )
+                    for e in cands_to_score
+                ]
+                max_u = max(s[1] for s in cand_scores)
+                top_cands = [s[0] for s in cand_scores if abs(s[1] - max_u) < 0.05]
+                best_ent = top_cands[self.step_counter % len(top_cands)]
+                chosen_coord = (int(round(best_ent.centroid[0])), int(round(best_ent.centroid[1])))
+            elif active_list:
+                pruned_active = self.algebra.filter_oscillating_actions(active_list, list(self.recent_coords))
+                chosen_coord = (pruned_active or active_list)[self.step_counter % len(pruned_active or active_list)]
             else:
                 H, W = analysis.frame_shape
-                payload = {
-                    "x": int(np.clip(W // 2, 0, 63)),
-                    "y": int(np.clip(H // 2, 0, 63)),
-                }
+                chosen_coord = (int(np.clip(H // 2, 0, 63)), int(np.clip(W // 2, 0, 63)))
+
+            if chosen_coord is not None:
+                self.recent_coords.append(chosen_coord)
+
+            payload = {
+                "x": int(np.clip(chosen_coord[1], 0, 63)),
+                "y": int(np.clip(chosen_coord[0], 0, 63)),
+            }
 
         action, valid_payload = LegalityAdapter.validate_action(
             state=observation.state,
@@ -1439,6 +3326,40 @@ class EpistemicPolicy:
             confidence=0.5,
         )
         return action, valid_payload, trace
+
+    def _compute_action_utility(
+        self,
+        coord: tuple[int, int],
+        entity: Any,
+        structured_belief: Any | None,
+        reasoning_state: PersistentReasoningState | None,
+    ) -> float:
+        """
+        Computes action utility: U(a) = α*G(a) + β*I(a) + γ*C(a) - λ*K(a) - μ*R(a)
+        Maximizes goal progress and information gain while penalizing action cost and risk.
+        """
+        G = 0.5
+        C = 0.5
+        I = 1.0
+        R = 0.0
+        K = 1.0
+
+        if structured_belief is not None and hasattr(structured_belief, "mechanisms"):
+            hyp = structured_belief.mechanisms.get_hypothesis(coord)
+            if hyp is not None:
+                G = hyp.goal_relevance
+                C = hyp.causal_confidence
+                I = 1.0 / (hyp.observations + 1.0)
+                if hyp.is_lethal:
+                    R = 1.0
+            else:
+                I = 1.0
+
+        if reasoning_state is not None and coord in reasoning_state.death_coords:
+            R = 1.0
+
+        # Weights: α=3.5 (goal progress), β=1.0 (information gain), γ=1.0 (causal confidence), λ=0.5 (action cost), μ=5.0 (risk)
+        return 3.5 * G + 1.0 * I + 1.0 * C - 0.5 * K - 5.0 * R
 
     def _plan_goal_trajectory(
         self,
@@ -1756,7 +3677,7 @@ except ImportError:
 
 class MyAgent(Agent):
     """
-    Production-ready Uncertainty-Aware Agent for ARC-AGI-3.
+    Production-ready Uncertainty-Aware Agent for ARC-AGI-3 (Baseline 2.0: FD-NSA).
     """
 
     MAX_ACTIONS = 1000
@@ -1769,7 +3690,7 @@ class MyAgent(Agent):
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
-        self.game_id = getattr(self, "game_id", game_id)
+        self.game_id = game_id
         self.parameters = parameters or {}
         self.perception = LayeredPerception()
         self.cognitive_perception = CognitiveHierarchyPerception()
@@ -1778,6 +3699,14 @@ class MyAgent(Agent):
         self.memory = ScopedEpisodeMemory(game_key=self.game_id)
         self.reasoning_state = PersistentReasoningState(game_id=self.game_id)
         self.compactor = ContextCompactor()
+
+        # Baseline 2.0: 5-Tier Memory, Falsification Engine, Deadlock Taxonomy, Transfer Manager
+        self.structured_belief = StructuredBeliefState(game_id=self.game_id)
+        self.falsification_engine = FalsificationEngine()
+        self.deadlock_engine = DeadlockTaxonomyEngine()
+        self.level_transfer = LevelTransferManager()
+        self.replay_logger = ReplayLogger(game_id=self.game_id)
+        self.previous_prediction: ForwardPrediction | None = None
 
         self.previous_observation: Observation | None = None
         self.previous_analysis: FrameAnalysis | None = None
@@ -1802,8 +3731,22 @@ class MyAgent(Agent):
         self.action_count += 1
 
         current_level = getattr(latest_frame, "levels_completed", 0) + 1
-        if current_level != self.reasoning_state.current_level:
+        if current_level != self.structured_belief.current_level:
+            # 0. Cross-level invariant extraction upon level progression
+            self.level_transfer.extract_level_schema(
+                level_index=self.structured_belief.current_level,
+                kinematic_mappings=self.falsification_engine.kinematic_mappings,
+                avatar_size=1,
+                actions_used=set(self.falsification_engine.kinematic_mappings.keys()),
+                skill_memory=self.structured_belief.skills,
+                game_id=self.game_id,
+                mechanism_memory=self.structured_belief.mechanisms,
+            )
+            self.structured_belief.reset_level(current_level)
+            self.deadlock_engine.reset_level()
             self.reasoning_state.reset_level(current_level)
+            # Apply transferred mechanism priors to the new level
+            self.level_transfer.apply_mechanism_priors(self.structured_belief.mechanisms)
 
         # Extract frame arrays
         raw_frames = getattr(latest_frame, "frame", [])
@@ -1845,7 +3788,7 @@ class MyAgent(Agent):
             state=state_str,
             available_actions=frozenset(avail_actions),
             game_key=self.game_id,
-            level=getattr(latest_frame, "levels_completed", 0) + 1,
+            level=current_level,
             action_count=self.action_count,
             guid=getattr(latest_frame, "guid", None),
         )
@@ -1868,24 +3811,193 @@ class MyAgent(Agent):
             ):
                 self.reasoning_state.player_color = cognitive_analysis.player_color
 
-        # 2. Update Reasoning Persistence (Causal displacements & deaths)
-        if (
-            self.previous_action is not None
-            and self.previous_cognitive is not None
-            and self.previous_cognitive.player_pos is not None
-            and cognitive_analysis.player_pos is not None
-        ):
-            dy = cognitive_analysis.player_pos[0] - self.previous_cognitive.player_pos[0]
-            dx = cognitive_analysis.player_pos[1] - self.previous_cognitive.player_pos[1]
+        # 2. Prediction-Error Evaluation & Bayesian Belief Revision
+        curr_pos = cognitive_analysis.player_pos if cognitive_analysis else None
+        prev_pos = self.previous_cognitive.player_pos if self.previous_cognitive else None
+
+        if self.previous_action is not None and self.previous_prediction is not None:
+            diff_count = (
+                int(np.sum(current_analysis.dynamic_diff_mask))
+                if current_analysis.dynamic_diff_mask is not None
+                else 0
+            )
+
+            # Compute decomposed prediction error vector
+            pred_error = self.falsification_engine.evaluate_prediction_error(
+                prediction=self.previous_prediction,
+                actual_pos=curr_pos,
+                prev_pos=prev_pos,
+                level_advanced=(current_level > self.structured_belief.current_level),
+                grid_diff_count=diff_count,
+            )
+
+            # Bayesian update and conditional falsification
+            self.falsification_engine.update_and_falsify(
+                action=self.previous_action,
+                prev_pos=prev_pos,
+                actual_pos=curr_pos,
+                prediction=self.previous_prediction,
+                error=pred_error,
+                hypotheses=self.structured_belief.hypotheses,
+            )
+
+            # Record transition in causal memory
+            self.structured_belief.causal.record(
+                step=self.action_count - 1,
+                action=self.previous_action,
+                payload=getattr(self, "last_payload", {}),
+                prev_pos=prev_pos,
+                curr_pos=curr_pos,
+                diff_pixel_count=diff_count,
+            )
+
+            # Deadlock classification & recovery check
+            tgt_coord = None
+            if hasattr(self, "last_payload") and self.last_payload:
+                tgt_coord = (self.last_payload.get("y"), self.last_payload.get("x"))
+
+            deadlock = self.deadlock_engine.record_step(
+                current_pos=curr_pos,
+                action=self.previous_action,
+                state=state_str,
+                active_goal=self.structured_belief.goals.active_goal_coord,
+                goal_reached_without_win=(
+                    curr_pos == self.structured_belief.goals.active_goal_coord
+                    and state_str not in ("WIN", "GameState.WIN")
+                ),
+                diff_count=diff_count,
+                target_coord=tgt_coord,
+            )
+            if deadlock and deadlock.deadlock_type == DeadlockType.TYPE_2_WRONG_GOAL:
+                if curr_pos:
+                    self.structured_belief.goals.falsify(curr_pos)
+                    self.reasoning_state.falsify_goal(curr_pos)
+
+            # Coordinate affordance & mechanism ledger registration for ACTION6
+            if self.previous_action == "ACTION6" and hasattr(self, "last_payload") and self.last_payload:
+                px = self.last_payload.get("x")
+                py = self.last_payload.get("y")
+                if px is not None and py is not None:
+                    is_lethal = state_str in ("GAME_OVER", "GameState.GAME_OVER") or (
+                        deadlock is not None and deadlock.deadlock_type == DeadlockType.TYPE_5_LETHAL_TRAP
+                    )
+                    level_adv = (current_level > self.structured_belief.current_level)
+                    self.reasoning_state.register_affordance_result(
+                        coord=(py, px),
+                        diff_count=diff_count,
+                        is_lethal=bool(is_lethal),
+                        state_str=state_str,
+                        level_advanced=level_adv,
+                    )
+
+                    # B3.02: Resolve target entity and record in Causal Mechanism Ledger
+                    target_sig = None
+                    cand_pool = self.previous_analysis.entities if self.previous_analysis and self.previous_analysis.entities else current_analysis.entities
+                    if cand_pool:
+                        for ent in cand_pool:
+                            if (py, px) in getattr(ent, "cells", ()):
+                                target_sig = EntitySignature.from_entity(ent)
+                                break
+                        if target_sig is None:
+                            best_d = float("inf")
+                            best_ent = None
+                            for ent in cand_pool:
+                                d = abs(ent.centroid[0] - py) + abs(ent.centroid[1] - px)
+                                if d < best_d and d <= 4.0:
+                                    best_d = d
+                                    best_ent = ent
+                            if best_ent is not None:
+                                target_sig = EntitySignature.from_entity(best_ent)
+
+                    # Identify changed entity signatures
+                    changed_sigs = []
+                    if current_analysis.entities:
+                        for ent in current_analysis.entities:
+                            if getattr(ent, "is_dynamic", False):
+                                changed_sigs.append(EntitySignature.from_entity(ent))
+
+                    eff_type = self.reasoning_state.last_effect_type or classify_effect(
+                        diff_count=diff_count,
+                        state=state_str,
+                        level_advanced=level_adv,
+                        is_lethal=bool(is_lethal),
+                    )
+                    pre_hash = str(hash(prev_grid.tobytes())) if prev_grid is not None else ""
+                    post_hash = str(hash(grid.tobytes()))
+
+                    self.structured_belief.mechanisms.record_transition(
+                        step=self.action_count - 1,
+                        action=self.previous_action,
+                        target_coord=(py, px),
+                        target_entity=target_sig,
+                        effect_type=eff_type,
+                        diff_count=diff_count,
+                        changed_entity_signatures=changed_sigs,
+                        level_advanced=level_adv,
+                        is_lethal=bool(is_lethal),
+                        pre_frame_hash=pre_hash,
+                        post_frame_hash=post_hash,
+                    )
+
+                    # B3.05: Update Goal-Variable Hypotheses
+                    if eff_type in (
+                        EffectType.LOCAL_MUTATION,
+                        EffectType.STRUCTURAL_MUTATION,
+                        EffectType.GLOBAL_MUTATION,
+                        EffectType.LEVEL_ADVANCE,
+                    ):
+                        var_key = f"var_{target_sig.size_bucket if target_sig else 'unknown'}_{eff_type.value}"
+                        self.structured_belief.goals.record_variable_transition(
+                            var_name=var_key,
+                            progress_occurred=bool(level_adv or eff_type == EffectType.STRUCTURAL_MUTATION),
+                        )
+
+            # Log step telemetry to ReplayLogger
+            self.replay_logger.log_step(
+                step=self.action_count - 1,
+                level=self.structured_belief.current_level,
+                observation_hash=str(hash(grid.tobytes())),
+                action=self.previous_action,
+                payload=getattr(self, "last_payload", {}),
+                predicted_avatar_pos=self.previous_prediction.predicted_player_pos,
+                actual_avatar_pos=curr_pos,
+                prediction_error=pred_error,
+                active_hypotheses=self.structured_belief.hypotheses.get_distribution(),
+                active_goal=self.structured_belief.goals.active_goal_coord,
+                deadlock_type=deadlock.deadlock_type.value if deadlock else None,
+                state=state_str,
+                levels_completed=getattr(latest_frame, "levels_completed", 0),
+            )
+
+        # Update perceptual and goal memories
+        bg_col = (
+            current_analysis.background_hypotheses[0][0]
+            if current_analysis.background_hypotheses
+            else 0
+        )
+        self.structured_belief.perceptual.update(
+            grid=grid,
+            entities=current_analysis.entities,
+            player_pos=cognitive_analysis.player_pos,
+            player_color=cognitive_analysis.player_color,
+            bg_color=bg_col,
+            step=self.action_count,
+        )
+        for goal_coord in cognitive_analysis.candidate_goals:
+            self.structured_belief.goals.add_candidate(goal_coord, color=0)
+
+        # Update Reasoning Persistence displacements
+        if self.previous_action is not None and prev_pos is not None and curr_pos is not None:
+            dy = curr_pos[0] - prev_pos[0]
+            dx = curr_pos[1] - prev_pos[1]
             self.reasoning_state.update_action_effect(self.previous_action, dy, dx)
 
         # Context compaction
-        prev_pos = self.previous_cognitive.player_pos if self.previous_cognitive else None
         self.compactor.compact_step(
             step=self.action_count,
             level=current_obs.level,
             action=self.previous_action or "NONE",
-            curr_pos=cognitive_analysis.player_pos,
+            curr_pos=curr_pos,
             prev_pos=prev_pos,
             state=state_str,
             levels_completed=getattr(latest_frame, "levels_completed", 0),
@@ -1912,6 +4024,16 @@ class MyAgent(Agent):
             world_model=self.world_model,
             reasoning_state=self.reasoning_state,
             cognitive_analysis=cognitive_analysis,
+            structured_belief=self.structured_belief,
+        )
+
+        # 4. Generate 1-Step Forward Prediction for chosen action
+        self.previous_prediction = self.falsification_engine.predict_next_state(
+            action=action_name,
+            current_pos=curr_pos,
+            hypotheses=self.structured_belief.hypotheses,
+            grid_shape=grid.shape,
+            target_pos=self.structured_belief.goals.active_goal_coord,
         )
 
         # Update tracking
@@ -1920,5 +4042,4 @@ class MyAgent(Agent):
         self.previous_cognitive = cognitive_analysis
         self.previous_action = action_name
         self.last_payload = payload
-
-        return LegalityAdapter.to_game_action(action_name)
+        return LegalityAdapter.to_game_action(action_name, payload)

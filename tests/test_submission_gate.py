@@ -13,6 +13,8 @@ def test_build_submission_hash_output(tmp_path):
     assert "notebook_sha256" in prov
     assert len(prov["notebook_sha256"]) == 64
     assert prov["notebook_path"].endswith("submission.ipynb")
+    assert prov["config_sha256"] != "FILE_NOT_FOUND"
+    assert len(prov["config_sha256"]) == 64
 
 
 def test_request_approval_token_structure(tmp_path):
