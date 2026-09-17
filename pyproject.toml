@@ -70,6 +70,7 @@ pythonpath = ["."]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
+extend-exclude = ["agent/bundled_my_agent.py", "notebooks/*"]
 
 [tool.ruff.lint]
 select = [
