@@ -1,28 +1,85 @@
-# Python & Virtual Environments
-.venv/
+# ==============================================================================
+# Git Ignore Configuration for ARC-AGI-3 Agent & Research Platform
+# ==============================================================================
+
+# Python Bytecode & Optimization
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 
-# Testing & Artifacts
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Packaging, Distribution & Builds
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Static Analysis, Linters & Test Caches
 .pytest_cache/
-scratch/
-recordings/
-environment_files/
-experiments/
-reports/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
 
-# Logs & OS
-*.log
-.DS_Store
-Thumbs.db
-
-# Data & Submissions
-data/
-submissions/
-submission.csv
-
-# Secrets & Environment
+# Secrets, Environment Variables & API Credentials
 .env
 *.env
+.env.*
+!*.env.example
+kaggle.json
+*.pem
+*.key
+
+# Operating System & File System Artifacts
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# IDE & Editor Configurations
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.bak
+
+# ARC-AGI-3 Local Cache & Execution Artifacts
+data/
+environment_files/
+experiments/
+recordings/
+reports/
+scratch/
+submissions/
+submission.csv
+*.log
