@@ -63,7 +63,7 @@ class BeliefStateWorldModel:
         """
         stats = self.action_stats.get(action)
         if stats and sum(stats["displacements"].values()) >= 2:
-            return stats["fidelity"] >= 0.85
+            return bool(stats["fidelity"] >= 0.85)
         # Fallback to top Bayesian hypothesis if sufficiently proven
         top_hyp = self.belief.get_most_likely_hypothesis()
         if (
@@ -80,7 +80,8 @@ class BeliefStateWorldModel:
         """Returns empirical or top-hypothesis displacement vector for action."""
         stats = self.action_stats.get(action)
         if stats and stats["dominant"] is not None and self.is_action_verified(action):
-            return stats["dominant"]
+            dom = stats["dominant"]
+            return (int(dom[0]), int(dom[1]))
 
         top_hyp = self.belief.get_most_likely_hypothesis()
         if top_hyp is not None and top_hyp.confidence >= 0.5:

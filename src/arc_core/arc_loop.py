@@ -58,7 +58,9 @@ class ArcResearchLoop:
     def _load_registry(self) -> dict[str, Any]:
         if self.registry_path.exists():
             try:
-                return json.loads(self.registry_path.read_text(encoding="utf-8"))
+                data = json.loads(self.registry_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
             except Exception:
                 pass
         return {"experiments": [], "best_exp_id": None, "best_lcb": 0.0}

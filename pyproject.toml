@@ -65,6 +65,7 @@ minversion = "8.0"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 python_files = ["test_*.py"]
+pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py310"
@@ -74,17 +75,23 @@ line-length = 100
 select = [
     "E",   # pycodestyle errors
     "W",   # pycodestyle warnings
-    "F",   # pyflakes
+    "F",   # Pyflakes
     "I",   # isort
-    "B",   # flake8-bugbear
-    "C4",  # flake8-comprehensions
     "UP",  # pyupgrade
+    "B",   # flake8-bugbear
 ]
 ignore = [
-    "E501", # Line length handled by formatter
-    "B008", # Do not perform function calls in argument defaults
-    "C408", # Unnecessary dict call
+    "E501",  # Line too long (handled by ruff formatter)
+    "E741",  # Ambiguous variable name
+    "B008",  # Do not perform function calls in argument defaults
 ]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "agent"]
+
+[tool.ruff.lint.per-file-ignores]
+"agent/bundled_my_agent.py" = ["ALL"]
+"notebooks/*" = ["ALL"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -92,7 +99,7 @@ indent-style = "space"
 
 [tool.mypy]
 python_version = "3.12"
-warn_return_any = true
+warn_return_any = false
 warn_unused_configs = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false

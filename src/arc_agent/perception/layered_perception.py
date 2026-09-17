@@ -56,7 +56,7 @@ class LayeredPerception:
 
         H, W = frame.shape
         unique_colors, counts = np.unique(frame, return_counts=True)
-        present_colors = set(int(c) for c in unique_colors)
+        present_colors = {int(c) for c in unique_colors}
 
         # 1. Multi-candidate background inference
         bg_hypotheses = self._infer_background_candidates(frame, unique_colors, counts)

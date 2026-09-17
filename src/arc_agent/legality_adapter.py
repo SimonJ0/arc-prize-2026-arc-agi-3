@@ -66,7 +66,7 @@ class LegalityAdapter:
             elif "RESET" in available_upper:
                 action_name = "RESET"
             else:
-                action_name = sorted(list(available_upper))[0]
+                action_name = sorted(available_upper)[0]
 
         # Rule 3: Parameter rules
         if action_name == "ACTION6":

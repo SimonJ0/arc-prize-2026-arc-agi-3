@@ -32,7 +32,7 @@ def test_dre_bench_attribute_and_spatial_levels():
     assert analysis.dominant_color == 0
     assert len(analysis.attributes) == 3
     # Check singleton detection
-    singletons = [p for p in analysis.singleton_entities]
+    singletons = list(analysis.singleton_entities)
     assert len(singletons) >= 2
 
     # Check symmetry scores exist

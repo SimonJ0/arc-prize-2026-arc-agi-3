@@ -2,7 +2,6 @@
 AUTONOMOUS ARC-AGI-3 UNCERTAINTY-AWARE AGENT (INLINED DEPLOYMENT BUNDLE)
 Self-contained, offline-compatible implementation for Kaggle code competition.
 """
-
 from __future__ import annotations
 import os
 import sys
@@ -20,8 +19,7 @@ from arcengine import GameAction, GameState, FrameDataRaw
 try:
     from agents.agent import Agent
 except ImportError:
-
-    class Agent:
+    class Agent:  # type: ignore[no-redef]
         def __init__(self, game_id: str = "default_game", *args: Any, **kwargs: Any):
             self.game_id = game_id
 
@@ -147,7 +145,6 @@ class DecisionTrace:
     predicted_next_state: str | None
     confidence: float
 
-
 # ======================================================================
 # INLINED: legality_adapter.py
 # ======================================================================
@@ -220,7 +217,7 @@ class LegalityAdapter:
             elif "RESET" in available_upper:
                 action_name = "RESET"
             else:
-                action_name = sorted(list(available_upper))[0]
+                action_name = sorted(available_upper)[0]
 
         # Rule 3: Parameter rules
         if action_name == "ACTION6":
@@ -253,7 +250,6 @@ class LegalityAdapter:
             return GameAction.from_name(key)
         except Exception:
             return GameAction.RESET
-
 
 # ======================================================================
 # INLINED: layered_perception.py
@@ -317,7 +313,7 @@ class LayeredPerception:
 
         H, W = frame.shape
         unique_colors, counts = np.unique(frame, return_counts=True)
-        present_colors = set(int(c) for c in unique_colors)
+        present_colors = {int(c) for c in unique_colors}
 
         # 1. Multi-candidate background inference
         bg_hypotheses = self._infer_background_candidates(frame, unique_colors, counts)
@@ -416,7 +412,6 @@ class LayeredPerception:
                 entity_id_counter += 1
 
         return entities
-
 
 # ======================================================================
 # INLINED: cognitive_hierarchy.py
@@ -695,7 +690,6 @@ class CognitiveHierarchyPerception:
             is_stagnant=is_stagnant,
         )
 
-
 # ======================================================================
 # INLINED: reasoning_state.py
 # ======================================================================
@@ -908,7 +902,6 @@ class ContextCompactor:
             "recent_trajectory": recent,
         }
 
-
 # ======================================================================
 # INLINED: belief_state.py
 # ======================================================================
@@ -923,6 +916,7 @@ Only authorizes deep planning when model consensus and fidelity meet confidence 
 from typing import Any
 
 import numpy as np
+
 
 
 class BeliefStateWorldModel:
@@ -970,7 +964,7 @@ class BeliefStateWorldModel:
         """
         stats = self.action_stats.get(action)
         if stats and sum(stats["displacements"].values()) >= 2:
-            return stats["fidelity"] >= 0.85
+            return bool(stats["fidelity"] >= 0.85)
         # Fallback to top Bayesian hypothesis if sufficiently proven
         top_hyp = self.belief.get_most_likely_hypothesis()
         if (
@@ -987,7 +981,8 @@ class BeliefStateWorldModel:
         """Returns empirical or top-hypothesis displacement vector for action."""
         stats = self.action_stats.get(action)
         if stats and stats["dominant"] is not None and self.is_action_verified(action):
-            return stats["dominant"]
+            dom = stats["dominant"]
+            return (int(dom[0]), int(dom[1]))
 
         top_hyp = self.belief.get_most_likely_hypothesis()
         if top_hyp is not None and top_hyp.confidence >= 0.5:
@@ -1188,7 +1183,6 @@ class BeliefStateWorldModel:
         dy, dx = self.DELTA_MAP[direction]
         return (curr_pos[0] + dy, curr_pos[1] + dx)
 
-
 # ======================================================================
 # INLINED: epistemic_policy.py
 # ======================================================================
@@ -1207,6 +1201,7 @@ from collections.abc import Collection
 from typing import Any
 
 import numpy as np
+
 
 
 class EpistemicPolicy:
@@ -1247,7 +1242,7 @@ class EpistemicPolicy:
                 level=observation.level,
                 step=self.step_counter,
                 observation_hash=str(hash(observation.frames[0].tobytes())),
-                legal_actions=tuple(sorted(list(available))),
+                legal_actions=tuple(sorted(available)),
                 selected_action=action,
                 selected_payload=payload,
                 planning_mode="RESET_RECOVERY",
@@ -1292,7 +1287,7 @@ class EpistemicPolicy:
                     level=observation.level,
                     step=self.step_counter,
                     observation_hash=str(hash(observation.frames[0].tobytes())),
-                    legal_actions=tuple(sorted(list(available))),
+                    legal_actions=tuple(sorted(available)),
                     selected_action=action,
                     selected_payload=payload,
                     planning_mode="PERSISTENT_MACRO_PLAN",
@@ -1344,7 +1339,7 @@ class EpistemicPolicy:
                         level=observation.level,
                         step=self.step_counter,
                         observation_hash=str(hash(observation.frames[0].tobytes())),
-                        legal_actions=tuple(sorted(list(available))),
+                        legal_actions=tuple(sorted(available)),
                         selected_action=action,
                         selected_payload=payload,
                         planning_mode="MACRO_GOAL_PLAN",
@@ -1436,7 +1431,7 @@ class EpistemicPolicy:
             level=observation.level,
             step=self.step_counter,
             observation_hash=str(hash(observation.frames[0].tobytes())),
-            legal_actions=tuple(sorted(list(observation.available_actions))),
+            legal_actions=tuple(sorted(observation.available_actions)),
             selected_action=action,
             selected_payload=valid_payload,
             planning_mode="DEADLOCK_BREAKER" if is_loop else "EPISTEMIC_PROBE",
@@ -1484,7 +1479,7 @@ class EpistemicPolicy:
                 level=observation.level,
                 step=self.step_counter,
                 observation_hash=str(hash(frame.tobytes())),
-                legal_actions=tuple(sorted(list(available))),
+                legal_actions=tuple(sorted(available)),
                 selected_action=action,
                 selected_payload=valid_payload,
                 planning_mode="GOAL_PLAN",
@@ -1634,7 +1629,6 @@ class EpistemicPolicy:
 
         return None
 
-
 # ======================================================================
 # INLINED: scoped_memory.py
 # ======================================================================
@@ -1728,7 +1722,6 @@ class ScopedEpisodeMemory:
         """Checks if this action from this state is known to cause GAME_OVER."""
         frame_hash = str(hash(frame.tobytes()))
         return (frame_hash, action) in self.forbidden_transitions
-
 
 # ======================================================================
 # PRIMARY AGENT: my_agent.py

@@ -132,8 +132,8 @@ class PlatformBenchmarkSuite:
             agent = agent_factory(game_id)
 
         # Tracking state
-        actions_per_level: dict[int, int] = {lvl: 0 for lvl in range(1, total_levels + 1)}
-        level_completed_flags: dict[int, bool] = {lvl: False for lvl in range(1, total_levels + 1)}
+        actions_per_level: dict[int, int] = dict.fromkeys(range(1, total_levels + 1), 0)
+        level_completed_flags: dict[int, bool] = dict.fromkeys(range(1, total_levels + 1), False)
         latencies_ms: list[float] = []
         legal_actions_count = 0
         illegal_actions_count = 0

@@ -76,7 +76,7 @@ def generate_bundle() -> str:
         "try:",
         "    from agents.agent import Agent",
         "except ImportError:",
-        "    class Agent:",
+        "    class Agent:  # type: ignore[no-redef]",
         '        def __init__(self, game_id: str = "default_game", *args: Any, **kwargs: Any):',
         "            self.game_id = game_id",
         "",
