@@ -139,8 +139,8 @@ charming-hertz/
 Clone the repository and set up a virtual environment:
 
 ```bash
-git clone <repository-url>
-cd charming-hertz
+git clone https://github.com/SimonJ0/arc-prize-2026-arc-agi-3.git
+cd arc-prize-2026-arc-agi-3
 
 # Create and activate virtual environment using uv or standard venv
 uv venv .venv

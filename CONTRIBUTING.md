@@ -14,8 +14,8 @@ Thank you for contributing to the **ARC-AGI-3 Agent & LMSYS Research Loop** plat
 ### Initializing the Workspace
 ```bash
 # Clone the repository
-git clone <repo-url>
-cd charming-hertz
+git clone https://github.com/SimonJ0/arc-prize-2026-arc-agi-3.git
+cd arc-prize-2026-arc-agi-3
 
 # Create and activate virtual environment
 uv venv .venv
