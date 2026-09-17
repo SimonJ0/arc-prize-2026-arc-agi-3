@@ -51,8 +51,6 @@ dev = [
     "ruff>=0.4.0",
     "pandas>=2.0.0",
     "kaggle>=1.6.0",
-    "scikit-learn>=1.3.0",
-    "lightgbm>=4.0.0",
     "types-PyYAML>=6.0.12.20240314",
     "types-requests>=2.31.0.20240406",
 ]

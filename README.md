@@ -1,41 +1,33 @@
-# ARC-AGI-3 Cognitive Agent & LMSYS Autonomous Research Platform
+# ARC-AGI-3 Cognitive Agent Architecture (ARC Prize 2026)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](https://www.python.org/downloads/)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 [![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue.svg)](http://mypy-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Tests: 63/63 Passing](https://img.shields.io/badge/tests-63%2F63%20passing-brightgreen.svg)]()
+[![Tests: 33/33 Passing](https://img.shields.io/badge/tests-33%2F33%20passing-brightgreen.svg)]()
 
-A unified, production-grade autonomous intelligence repository housing two state-of-the-art competitive ML and cognitive agent architectures:
-
-1. **ARC-AGI-3 Cognitive Agent Platform (`src/arc_agent`, `src/arc_core`, `agent/`)**  
-   An uncertainty-aware epistemic agent built for the **ARC Prize 2026 (ARC-AGI-3)**. Incorporates a 4-level cognitive hierarchy, persistent reasoning states, automatic context compaction, Bayesian world-model belief states, heuristic A* pathfinding, and strict runtime legality adaptation.
-
-2. **LMSYS Chatbot Arena Autonomous Research Loop (`src/core`, `src/features`, `src/models`, `src/submit`)**  
-   An autonomous self-improving machine learning research loop for pairwise LLM preference prediction. Features anti-symmetric feature engineering, dense Latent Semantic Analysis (LSA) projections, LightGBM GBDT models with exact Test-Time Augmentation (TTA) symmetry, nested CV ensemble blending, temperature calibration, and the **Cryptographic Iron Rule** submission gate.
+An autonomous, uncertainty-aware epistemic agent built for the **ARC Prize 2026 (ARC-AGI-3)** competition. The architecture replaces brittle heuristic templates with **empirical 1-step dynamics learning**, a **4-level cognitive hierarchy (DRE-Bench)**, **Bayesian belief-state tracking**, **surprise-driven plan invalidation**, **deadlock loop breaking**, and strict **runtime legality adaptation**.
 
 ---
 
 ## Repository Architecture
 
 ```
-charming-hertz/
+arc-prize-2026-arc-agi-3/
 ├── .agents/
-│   └── skills/self-improving-ai-ml/ # Autonomous research loop skill & templates
+│   └── skills/self-improving-ai-ml/ # Autonomous agent research skill
 ├── agent/
 │   ├── my_agent.py                  # Modular ARC-AGI-3 agent entrypoint
-│   └── bundled_my_agent.py          # Standalone, zero-dependency Kaggle bundle
+│   └── bundled_my_agent.py          # Standalone, zero-dependency Kaggle bundle (1,924 lines)
 ├── configs/
-│   ├── default_config.yaml          # LMSYS experiment loop & feature configs
-│   ├── hypotheses.yaml              # LMSYS prioritized hypothesis queue
 │   └── arc_hypotheses.yaml          # ARC-AGI-3 agent exploration hypotheses
 ├── docs/
-│   └── adr/                         # Architecture Decision Records
+│   └── adr/                         # Architecture Decision Records (ADR-001)
 ├── notebooks/
 │   ├── kernel-metadata.json         # Kaggle notebook competition metadata
-│   └── submission.ipynb             # Standalone competition submission notebook
+│   └── submission.ipynb             # Standalone competition submission notebook (< 1MB)
 ├── scripts/
-│   ├── bundle_agent.py              # Inlines agent into zero-dependency bundle
+│   ├── bundle_agent.py              # Inlines modular agent into zero-dependency bundle
 │   └── build_notebook.py            # Generates validated Kaggle submission notebook
 ├── src/
 │   ├── arc_agent/                   # ARC-AGI-3 Cognitive Agent Subsystem
@@ -47,88 +39,60 @@ charming-hertz/
 │   │   │   ├── cognitive_hierarchy.py # DRE-Bench 4-level perception hierarchy
 │   │   │   └── layered_perception.py  # Spatial component & motion extraction
 │   │   ├── planning/
-│   │   │   └── epistemic_policy.py  # Epistemic exploration & A* pathfinding
+│   │   │   └── epistemic_policy.py  # Epistemic exploration & heuristic A* pathfinding
 │   │   └── world_model/
-│   │       └── belief_state.py      # Bayesian belief updates & hypothesis falsification
+│   │       └── belief_state.py      # Bayesian belief updates & empirical dynamics learning
 │   ├── arc_core/                    # ARC Platform Evaluation & Gating
 │   │   ├── arc_loop.py              # Autonomous hypothesis testing loop for ARC
-│   │   ├── contracts.py             # Immutable domain dataclasses & types
-│   │   ├── gating.py                # Verification gates (legality, efficiency, rhae)
+│   │   ├── contracts.py             # Immutable domain dataclasses & game contracts
+│   │   ├── gating.py                # Verification gates (legality, efficiency, RHAE)
 │   │   ├── metrics.py               # Robust Highest Action Efficiency (RHAE) metrics
 │   │   └── platform_bench.py        # Official Arcade platform benchmark & multi-budget suite
-│   ├── core/                        # LMSYS Research Engine Core
-│   │   ├── adaptive.py              # Dynamic hypothesis generation & mutation
-│   │   ├── calibration.py           # Post-hoc temperature calibration
-│   │   ├── gates.py                 # Leakage, symmetry, and CV improvement gates
-│   │   ├── guardrails.py            # Entropy bounds & anomaly detection
-│   │   ├── loop.py                  # SelfDrivingResearchLoop execution engine
-│   │   └── metrics.py               # Multi-class Log Loss, ECE, and symmetry divergence
-│   ├── data/
-│   │   ├── loader.py                # Safe dataset loading with validation
-│   │   └── splitter.py              # Stratified K-Fold cross-validation splitter
-│   ├── evaluation/
-│   │   ├── diagnostics.py           # Model failure analysis & calibration diagnostics
-│   │   └── html_reporter.py         # Visual HTML report generator
-│   ├── features/
-│   │   ├── extractor.py             # Anti-symmetric tabular feature engineering
-│   │   ├── lsa_vectorizer.py        # Dense TruncatedSVD / LSA text projections
-│   │   └── text_vectorizer.py       # Differential TF-IDF token vectorizer
-│   ├── models/
-│   │   ├── base.py                  # Abstract base model with strict TTA symmetry
-│   │   ├── ensemble.py              # Nested cross-validation convex ensemble blender
-│   │   ├── gbdt_classifier.py       # LightGBM multi-class GBDT predictor
-│   │   ├── length_prior.py          # Empirical response length prior baseline
-│   │   ├── tfidf_linear.py          # Differential sparse linear classifier
-│   │   └── transformer_head.py      # Symmetric Cross-Encoder / DeBERTa head interface
 │   └── submit/
-│       ├── generator.py             # Submissions & LZMA-compressed Kaggle kernel (< 1MB)
 │       └── submission_gate.py       # Cryptographic Iron Rule authorization gate
 ├── tests/
-│   ├── microworlds/                 # Synthetic deterministic test environments
+│   ├── microworlds/                 # Deterministic synthetic verification environments
 │   │   ├── test_coordinate_selection.py
 │   │   ├── test_delayed_effects.py
 │   │   ├── test_movement_induction.py
 │   │   └── test_reversibility.py
-│   └── test_*.py                    # 16 unit & integration test modules (63 tests)
-├── .env.example                     # Environment template (ARC & Kaggle credentials)
+│   ├── test_arc_contracts_and_legality.py
+│   ├── test_arc_metrics.py
+│   ├── test_cognitive_hierarchy_and_persistence.py
+│   ├── test_platform_bench.py
+│   └── test_submission_gate.py
+├── .env.example                     # Environment template (ARC API credentials)
 ├── .gitignore                       # Industry-standard comprehensive gitignore
 ├── CONTRIBUTING.md                  # Contribution guidelines & Conventional Commits
 ├── LICENSE                          # MIT License (2026)
-├── pyproject.toml                   # PEP 517/621 configuration (ruff, mypy, pytest)
+├── pyproject.toml                   # PEP 517/621 packaging (ruff, mypy, pytest)
 └── requirements.txt                 # Pinned, reproducible dependency manifest
 ```
 
 ---
 
-## Core System Highlights
+## Core Cognitive System Pillars
 
-### 1. ARC-AGI-3 Cognitive Agent Architecture
-- **DRE-Bench 4-Level Cognitive Hierarchy**:
-  - *Level 1 (Attribute)*: Detects color palettes, spatial bounds, and foreground clusters.
-  - *Level 2 (Spatial Relations)*: Computes distances, alignment, and contact manifolds.
-  - *Level 3 (Sequential Planning)*: Deque-based macro-action queue preventing single-step myopia.
-  - *Level 4 (Intuitive Physics)*: Caches movement step sizes, blocked corridors, and lethal hazards.
-- **Reasoning Persistence & Context Compaction**:
-  - Eliminates context rot by compressing past steps into concise semantic transition summaries.
-  - Retains active goals, death coordinates, and verified causal action effects across turns.
-- **Hard Legality Adapter**:
-  - Enforces zero `400 Bad Request` errors: ensures `GAME_OVER` strictly triggers `RESET`, strips coordinates from non-coordinate actions, and clamps `ACTION6` coordinates to $[0, 63]$.
-- **Cryptographic Iron Rule Submission Gate**:
-  - Zero network access during compilation; issues HMAC-signed authorization tokens expiring in 2 hours. Submissions require explicit operator confirmation.
+### 1. DRE-Bench 4-Level Cognitive Hierarchy
+- **Level 1 (Attribute)**: Extracts foreground entities, background palette, and dynamic bounding boxes.
+- **Level 2 (Spatial Relations)**: Computes centroid distances, cardinal alignments, and contact manifolds.
+- **Level 3 (Sequential Macro-Planning)**: Maintains a FIFO queue of verified subgoals, preventing single-step oscillation.
+- **Level 4 (Intuitive Physics)**: Learns causal motion vectors $(dy, dx)$ and static obstacles through empirical observation.
 
-### 2. LMSYS Preference Prediction Research Loop
-- **Anti-Symmetric Feature Engineering**:
-  - Exact anti-symmetry guarantee: $\phi(B, A) = -\phi(A, B)$ on differential features.
-  - Token counts, markdown header counts, code block metrics, readability scores, and lexical overlap.
-- **Dense LSA Vectorization**:
-  - Dimensionality reduction via `TruncatedSVD` on differential TF-IDF matrices, captured in `float16` for compact kernel serialization.
-- **Exact Test-Time Augmentation (TTA) Symmetry**:
-  - Enforces invariant probability assignments:
-    $$P_{\text{sym}}(\text{Win A}) = \frac{1}{2} \left[ P(A > B) + P'(B > A) \right]$$
-- **Nested Cross-Validation Ensemble Blending**:
-  - Non-negative convex optimization with out-of-fold cross-validation, avoiding in-sample weight overfitting.
-- **Kernel Compression**:
-  - Serializes booster models and LSA projections via extreme LZMA compression (`preset=9 | PRESET_EXTREME`) down to $< 1\text{ MB}$, satisfying Kaggle API notebook constraints.
+### 2. Empirical Transition Dynamics & 1-Step Verification
+- No hardcoded movement assumptions. The agent records empirical $(dy, dx)$ displacements and marks actions verified only upon reaching $\ge 85\%$ prediction consistency across at least 2 non-blocked executions.
+
+### 3. Reasoning Persistence & Context Compaction
+- Persists causal learning (`hazard_colors`, `death_coords`, `action_effects`) across game levels.
+- Re-initializes ephemeral state (`visitation_counts`, `falsified_goals`, `active_macro_plan`) upon level progression.
+- Compacts historical action transitions into semantic summaries to eliminate context window degradation.
+
+### 4. Surprise Detection & Loop Breaking
+- Predicts expected avatar coordinates for the next turn. If the environment diverges, `check_and_handle_surprise` instantly aborts the macro-plan and clears invalid trajectories.
+- Tracks coordinate visitation frequency; if oscillation ($\ge 3$ visits) occurs, an epistemic deadlock-breaker injects orthogonal exploratory actions.
+
+### 5. Runtime Legality Adapter
+- **Zero 400 Bad Requests**: Intercepts `GAME_OVER` to force `RESET`, strips coordinates from non-coordinate actions, and clamps `ACTION6` coordinates to $[0, 63]$.
 
 ---
 
@@ -136,47 +100,34 @@ charming-hertz/
 
 ### 1. Installation
 
-Clone the repository and set up a virtual environment:
-
 ```bash
 git clone https://github.com/SimonJ0/arc-prize-2026-arc-agi-3.git
 cd arc-prize-2026-arc-agi-3
 
-# Create and activate virtual environment using uv or standard venv
+# Create and activate virtual environment
 uv venv .venv
+source .venv/bin/activate   # Linux/macOS
+.venv\Scripts\activate      # Windows
 
-# Windows:
-.venv\Scripts\activate
-# Linux/macOS:
-source .venv/bin/activate
-
-# Install dependencies in editable mode with development tools
+# Install in editable mode with development tools
 uv pip install -e ".[dev]"
 ```
 
-### 2. Environment Configuration
-
-Copy `.env.example` to `.env` and configure your credentials:
+### 2. Configuration
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
+Set your credentials in `.env`:
 ```ini
 ARC_API_KEY=your_arc_api_key_here
 ARC_BASE_URL=https://arcprize.org/api
-KAGGLE_USERNAME=your_kaggle_username
-KAGGLE_KEY=your_kaggle_api_key
 ```
 
 ---
 
-## CLI & Entrypoint Reference
-
-### ARC-AGI-3 Agent CLI (`cli.py` / `arc-cli`)
-
-The CLI enforces strict command boundaries in compliance with the **Cryptographic Iron Rule**:
+## CLI & Evaluation Reference
 
 ```bash
 # 1. Run the autonomous self-improving research loop over ARC hypotheses
@@ -185,11 +136,11 @@ python cli.py run-arc --hypotheses configs/arc_hypotheses.yaml
 # 2. Play a game locally (supports official Arcade environments or synthetic navigation)
 python cli.py play --game synthetic_nav --max-steps 30
 
-# 3. Evaluate the agent against official ARC-AGI-3 platform games
+# 3. Evaluate against official ARC-AGI-3 platform games
 python cli.py eval-platform --split train --max-actions 100
 
-# 4. Run multi-budget efficiency benchmark (e.g. 25, 50, 100 actions)
-python cli.py eval-platform --split train --budgets 25,50,100
+# 4. Run multi-budget holdout benchmark (e.g. 50, 100, 200 actions)
+python cli.py eval-platform --split holdout --budgets 50,100,200
 
 # 5. Build submission notebook and generate SHA-256 provenance hashes (Offline, Zero network)
 python cli.py build-submission --accelerator t4
@@ -201,61 +152,34 @@ python cli.py request-approval --exp-id EXP_ARC_001
 python cli.py submit --approval "<signed-hmac-token>"
 ```
 
-### LMSYS Research Loop Entrypoint (`run_loop.py`)
+---
+
+## Offline Clean-Room Bundler
+
+The entire agent can be bundled into a standalone, zero-dependency Python script for Kaggle execution:
 
 ```bash
-# Run the autonomous hypothesis research loop with fast cross-validation
-python run_loop.py
-```
-
-### Bundling & Notebook Generation Scripts
-
-```bash
-# Bundle modular agent into standalone single-file agent
-python scripts/bundle_agent.py
-
-# Build and validate Kaggle submission notebook
-python scripts/build_notebook.py
+python scripts/bundle_agent.py --output agent/bundled_my_agent.py --verify-offline
 ```
 
 ---
 
 ## Quality Assurance & Verification
 
-We adhere to tier-one software engineering rigor with automated linting, formatting, and test suites:
-
-### 1. Test Suite (100% Passing)
 ```bash
-pytest
-```
-Executes all 63 unit, integration, and microworld tests covering:
-- ARC contracts, legality adapters, and RHAE metrics
-- DRE-Bench cognitive hierarchy and OpenAI reasoning persistence
-- Synthetic microworlds (movement induction, delayed effects, reversibility, coordinate selection)
-- LMSYS feature extraction, TTA symmetry, GBDT classifiers, calibration, and nested ensembles
-- Standalone kernel generation and cryptographic submission gates
+# 1. Execute full unit and integration test suite (33/33 passing)
+pytest -v
 
-### 2. Linting & Static Analysis
-```bash
-# Check code style with Ruff
-ruff check .
-
-# Automated style formatting
-ruff format --check .
-
-# Strict type checking with Mypy
+# 2. Strict type checking
 mypy src tests
+
+# 3. Code formatting and linting
+ruff check .
+ruff format --check .
 ```
-
----
-
-## Contributing & Governance
-
-- Please consult [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines on branching, code style, and [Conventional Commits](https://www.conventionalcommits.org/).
-- All pull requests must pass `ruff check`, `mypy src tests`, and `pytest` with zero warnings before approval.
 
 ---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE) — see the LICENSE file for details.
+Distributed under the [MIT License](LICENSE).

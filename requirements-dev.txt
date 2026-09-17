@@ -17,6 +17,3 @@ kaggle>=1.6.17
 nbformat>=5.10.4
 pandas>=2.2.0
 
-# Optional Classical ML Baselines
-scikit-learn>=1.5.0
-lightgbm>=4.5.0
