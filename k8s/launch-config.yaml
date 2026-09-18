@@ -1,0 +1,7 @@
+entity: sjosiah-org
+queues:
+  - autoresearch-k8s
+max_jobs: 10
+builder:
+  type: noop
+verbosity: 1
